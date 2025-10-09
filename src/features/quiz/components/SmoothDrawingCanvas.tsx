@@ -35,6 +35,7 @@ export interface SmoothDrawingCanvasProps {
   onChange?: (strokes: SerializedStroke[]) => void;
   className?: string;
   onHistoryChange?: (info: { canUndo: boolean; canRedo: boolean }) => void;
+  viewportOrientation?: "portrait" | "landscape";
 }
 
 export interface SmoothDrawingCanvasHandle {
@@ -45,7 +46,16 @@ export interface SmoothDrawingCanvasHandle {
   loadStrokes: (strokes: SerializedStroke[]) => void;
 }
 
-interface InternalStroke extends SerializedStroke {}
+interface InternalStroke extends SerializedStroke {
+  path: Path2D | null;
+  dirty: boolean;
+}
+
+interface HistoryEntry {
+  type: "add" | "remove";
+  stroke: SerializedStroke;
+  index: number;
+}
 
 const STROKE_OPTIONS = {
   size: 16,
@@ -64,15 +74,47 @@ const STROKE_OPTIONS = {
   simulatePressure: false,
 };
 
-function cloneStrokes(input: InternalStroke[]): InternalStroke[] {
-  return input.map((stroke) => ({
-    ...stroke,
+function cloneSerializedStroke(stroke: SerializedStroke): SerializedStroke {
+  return {
+    id: stroke.id,
+    color: stroke.color,
+    size: stroke.size,
+    mode: stroke.mode,
     points: stroke.points.map((point) => ({ ...point })),
-  }));
+  };
 }
 
-function strokeToPath(stroke: InternalStroke) {
-  if (stroke.points.length === 0) return null;
+function createInternalStroke(source: SerializedStroke): InternalStroke {
+  return {
+    ...cloneSerializedStroke(source),
+    path: null,
+    dirty: true,
+  };
+}
+
+function toSerializedStroke(stroke: InternalStroke): SerializedStroke {
+  return {
+    id: stroke.id,
+    color: stroke.color,
+    size: stroke.size,
+    mode: stroke.mode,
+    points: stroke.points.map((point) => ({ ...point })),
+  };
+}
+
+function serializeStrokes(strokes: InternalStroke[]): SerializedStroke[] {
+  return strokes.map(toSerializedStroke);
+}
+
+function ensureStrokePath(stroke: InternalStroke): Path2D | null {
+  if (stroke.points.length < 2) {
+    stroke.path = null;
+    stroke.dirty = false;
+    return null;
+  }
+  if (stroke.path && !stroke.dirty) {
+    return stroke.path;
+  }
   const outline = getStroke(
     stroke.points.map((point) => [point.x, point.y, point.pressure]),
     {
@@ -80,7 +122,11 @@ function strokeToPath(stroke: InternalStroke) {
       size: stroke.size,
     }
   );
-  if (!outline.length) return null;
+  if (!outline.length) {
+    stroke.path = null;
+    stroke.dirty = false;
+    return null;
+  }
   const path = new Path2D();
   const [firstX, firstY] = outline[0];
   path.moveTo(firstX, firstY);
@@ -89,26 +135,38 @@ function strokeToPath(stroke: InternalStroke) {
     path.lineTo(x, y);
   }
   path.closePath();
+  stroke.path = path;
+  stroke.dirty = false;
   return path;
 }
 
-function toPoint(event: PointerEvent, rect: DOMRect): StrokePoint {
+function toPoint(
+  event: PointerEvent,
+  rect: DOMRect,
+  canvas: HTMLCanvasElement,
+  orientation: "portrait" | "landscape"
+): StrokePoint {
   const pressure = event.pressure > 0 ? event.pressure : 0.5;
+  if (orientation === "portrait") {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const dx = event.clientX - centerX;
+    const dy = event.clientY - centerY;
+    return {
+      x: dy + width / 2,
+      y: -dx + height / 2,
+      pressure,
+      time: Date.now(),
+    };
+  }
   return {
     x: event.clientX - rect.left,
     y: event.clientY - rect.top,
     pressure,
     time: Date.now(),
   };
-}
-
-function withAlpha(hex: string, alpha: number) {
-  const normalized = hex.replace("#", "");
-  const bigint = parseInt(normalized.length === 3 ? normalized.repeat(2) : normalized, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export const SmoothDrawingCanvas = forwardRef<
@@ -121,13 +179,17 @@ export const SmoothDrawingCanvas = forwardRef<
   onChange,
   className,
   onHistoryChange,
+  viewportOrientation = "landscape",
 }, ref) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const strokesRef = useRef<InternalStroke[]>([]);
-  const undoneRef = useRef<InternalStroke[]>([]);
+  const historyRef = useRef<HistoryEntry[]>([]);
+  const redoStackRef = useRef<HistoryEntry[]>([]);
   const activeStrokeRef = useRef<InternalStroke | null>(null);
+  const erasingRef = useRef(false);
   const rafPendingRef = useRef<number | null>(null);
   const historyChangeRef = useRef(onHistoryChange);
+  const pointerRectRef = useRef<DOMRect | null>(null);
 
   const scheduleRender = useCallback(() => {
     if (rafPendingRef.current !== null) return;
@@ -152,24 +214,17 @@ export const SmoothDrawingCanvas = forwardRef<
       context.clearRect(0, 0, width, height);
 
       for (const stroke of strokesRef.current) {
-        if (stroke.points.length < 2) continue;
-        const path = strokeToPath(stroke);
+        const path = ensureStrokePath(stroke);
         if (!path) continue;
         context.save();
         if (stroke.mode === "eraser") {
           context.globalCompositeOperation = "destination-out";
           context.fillStyle = "rgba(0,0,0,1)";
-          context.shadowBlur = 0;
-          context.filter = "none";
-          context.fill(path);
         } else {
           context.globalCompositeOperation = "source-over";
           context.fillStyle = stroke.color;
-          context.shadowColor = withAlpha(stroke.color, 0.33);
-          context.shadowBlur = 0.8;
-          context.filter = "blur(0.15px)";
-          context.fill(path);
         }
+        context.fill(path);
         context.restore();
       }
     });
@@ -181,8 +236,8 @@ export const SmoothDrawingCanvas = forwardRef<
 
   const emitHistory = useCallback(() => {
     historyChangeRef.current?.({
-      canUndo: strokesRef.current.length > 0,
-      canRedo: undoneRef.current.length > 0,
+      canUndo: historyRef.current.length > 0,
+      canRedo: redoStackRef.current.length > 0,
     });
   }, []);
 
@@ -216,94 +271,245 @@ export const SmoothDrawingCanvas = forwardRef<
     scheduleRender();
     emitHistory();
     if (onChange) {
-      onChange(cloneStrokes(strokesRef.current));
+      onChange(serializeStrokes(strokesRef.current));
     }
   }, [emitHistory, onChange, scheduleRender]);
+
+  const removeStrokeAtPoint = useCallback(
+    (point: Pick<StrokePoint, "x" | "y">, canvas: HTMLCanvasElement) => {
+      const context = canvas.getContext("2d");
+      if (!context) return false;
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      let removalIndex = -1;
+      for (let i = strokesRef.current.length - 1; i >= 0; i -= 1) {
+        const stroke = strokesRef.current[i];
+        const path = ensureStrokePath(stroke);
+        if (!path) continue;
+        if (context.isPointInPath(path, point.x, point.y)) {
+          removalIndex = i;
+          break;
+        }
+      }
+      context.restore();
+      if (removalIndex >= 0) {
+        const updated = [...strokesRef.current];
+        const [removedStroke] = updated.splice(removalIndex, 1);
+        strokesRef.current = updated;
+        historyRef.current.push({
+          type: "remove",
+          stroke: toSerializedStroke(removedStroke),
+          index: removalIndex,
+        });
+        redoStackRef.current = [];
+        commitChange();
+        return true;
+      }
+      return false;
+    },
+    [commitChange]
+  );
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      pointerRectRef.current = rect;
+      if (mode === "eraser") {
+        activeStrokeRef.current = null;
+        erasingRef.current = true;
+        canvas.setPointerCapture(event.pointerId);
+        const point = toPoint(event.nativeEvent, rect, canvas, viewportOrientation);
+        removeStrokeAtPoint(point, canvas);
+        return;
+      }
+
       const stroke: InternalStroke = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         color,
         size,
         mode,
-        points: [toPoint(event.nativeEvent, rect)],
+        points: [toPoint(event.nativeEvent, rect, canvas, viewportOrientation)],
+        path: null,
+        dirty: true,
       };
       activeStrokeRef.current = stroke;
       strokesRef.current = [...strokesRef.current, stroke];
-      undoneRef.current = [];
+      redoStackRef.current = [];
       emitHistory();
       canvas.setPointerCapture(event.pointerId);
       scheduleRender();
     },
-    [color, emitHistory, mode, scheduleRender, size]
+    [color, emitHistory, mode, removeStrokeAtPoint, scheduleRender, size, viewportOrientation]
   );
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      const stroke = activeStrokeRef.current;
       const canvas = canvasRef.current;
-      if (!stroke || !canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      stroke.points.push(toPoint(event.nativeEvent, rect));
+      if (!canvas) return;
+      const rect = pointerRectRef.current ?? canvas.getBoundingClientRect();
+      if (!pointerRectRef.current) {
+        pointerRectRef.current = rect;
+      }
+      if (mode === "eraser") {
+        if (!erasingRef.current) return;
+        const point = toPoint(event.nativeEvent, rect, canvas, viewportOrientation);
+        removeStrokeAtPoint(point, canvas);
+        return;
+      }
+      const stroke = activeStrokeRef.current;
+      if (!stroke) return;
+      stroke.points.push(toPoint(event.nativeEvent, rect, canvas, viewportOrientation));
+      stroke.dirty = true;
+      stroke.path = null;
       scheduleRender();
     },
-    [scheduleRender]
+    [mode, removeStrokeAtPoint, scheduleRender, viewportOrientation]
   );
 
   const endStroke = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      const stroke = activeStrokeRef.current;
       const canvas = canvasRef.current;
-      if (!stroke || !canvas) return;
+      if (!canvas) return;
+      if (mode === "eraser") {
+        if (erasingRef.current) {
+          erasingRef.current = false;
+          if (typeof canvas.hasPointerCapture === "function") {
+            if (canvas.hasPointerCapture(event.pointerId)) {
+              canvas.releasePointerCapture(event.pointerId);
+            }
+          } else {
+            canvas.releasePointerCapture(event.pointerId);
+          }
+        }
+        pointerRectRef.current = null;
+        return;
+      }
+      const stroke = activeStrokeRef.current;
+      if (!stroke) return;
       if (stroke.points.length < 2) {
         strokesRef.current = strokesRef.current.filter((item) => item !== stroke);
       } else {
-        undoneRef.current = [];
+        const index = strokesRef.current.findIndex((item) => item.id === stroke.id);
+        if (index >= 0) {
+          historyRef.current.push({
+            type: "add",
+            stroke: toSerializedStroke(stroke),
+            index,
+          });
+        }
+        redoStackRef.current = [];
       }
       activeStrokeRef.current = null;
       canvas.releasePointerCapture(event.pointerId);
+      pointerRectRef.current = null;
       commitChange();
     },
-    [commitChange]
+    [commitChange, mode]
   );
 
   const cancelStroke = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      const stroke = activeStrokeRef.current;
       const canvas = canvasRef.current;
-      if (!stroke || !canvas) return;
+      if (!canvas) return;
+      if (mode === "eraser") {
+        if (erasingRef.current) {
+          erasingRef.current = false;
+          if (typeof canvas.hasPointerCapture === "function") {
+            if (canvas.hasPointerCapture(event.pointerId)) {
+              canvas.releasePointerCapture(event.pointerId);
+            }
+          } else {
+            canvas.releasePointerCapture(event.pointerId);
+          }
+        }
+        pointerRectRef.current = null;
+        return;
+      }
+      const stroke = activeStrokeRef.current;
+      if (!stroke) return;
       strokesRef.current = strokesRef.current.filter((item) => item !== stroke);
       activeStrokeRef.current = null;
       canvas.releasePointerCapture(event.pointerId);
       scheduleRender();
       emitHistory();
+      pointerRectRef.current = null;
     },
-    [emitHistory, scheduleRender]
+    [emitHistory, mode, scheduleRender]
   );
 
   useImperativeHandle(
     ref,
     () => ({
       undo: () => {
-        const last = strokesRef.current.pop();
-        if (!last) return;
-        undoneRef.current.push(last);
+        const entry = historyRef.current.pop();
+        if (!entry) return;
+        if (entry.type === "add") {
+          const index = strokesRef.current.findIndex((item) => item.id === entry.stroke.id);
+          if (index === -1) {
+            historyRef.current.push(entry);
+            return;
+          }
+          const updated = [...strokesRef.current];
+          const [removedStroke] = updated.splice(index, 1);
+          strokesRef.current = updated;
+          redoStackRef.current.push({
+            type: "add",
+            stroke: toSerializedStroke(removedStroke),
+            index,
+          });
+        } else {
+          const insertIndex = Math.min(entry.index, strokesRef.current.length);
+          const strokeClone = createInternalStroke(entry.stroke);
+          const updated = [...strokesRef.current];
+          updated.splice(insertIndex, 0, strokeClone);
+          strokesRef.current = updated;
+          redoStackRef.current.push({
+            type: "remove",
+            stroke: cloneSerializedStroke(entry.stroke),
+            index: insertIndex,
+          });
+        }
         commitChange();
       },
       redo: () => {
-        const restored = undoneRef.current.pop();
-        if (!restored) return;
-        strokesRef.current = [...strokesRef.current, restored];
+        const entry = redoStackRef.current.pop();
+        if (!entry) return;
+        if (entry.type === "add") {
+          const insertIndex = Math.min(entry.index, strokesRef.current.length);
+          const strokeClone = createInternalStroke(entry.stroke);
+          const updated = [...strokesRef.current];
+          updated.splice(insertIndex, 0, strokeClone);
+          strokesRef.current = updated;
+          historyRef.current.push({
+            type: "add",
+            stroke: cloneSerializedStroke(entry.stroke),
+            index: insertIndex,
+          });
+        } else {
+          const index = strokesRef.current.findIndex((item) => item.id === entry.stroke.id);
+          if (index === -1) {
+            redoStackRef.current.push(entry);
+            return;
+          }
+          const updated = [...strokesRef.current];
+          const [removedStroke] = updated.splice(index, 1);
+          strokesRef.current = updated;
+          historyRef.current.push({
+            type: "remove",
+            stroke: toSerializedStroke(removedStroke),
+            index,
+          });
+        }
         commitChange();
       },
       clear: () => {
         if (strokesRef.current.length === 0) return;
         strokesRef.current = [];
-        undoneRef.current = [];
+        historyRef.current = [];
+        redoStackRef.current = [];
+        erasingRef.current = false;
         commitChange();
       },
       exportImage: async () => {
@@ -313,8 +519,10 @@ export const SmoothDrawingCanvas = forwardRef<
         return canvas.toDataURL("image/png");
       },
       loadStrokes: (strokes: SerializedStroke[]) => {
-        strokesRef.current = cloneStrokes(strokes);
-        undoneRef.current = [];
+        strokesRef.current = strokes.map((stroke) => createInternalStroke(stroke));
+        historyRef.current = [];
+        redoStackRef.current = [];
+        erasingRef.current = false;
         commitChange();
       },
     }),

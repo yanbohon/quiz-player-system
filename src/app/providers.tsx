@@ -124,11 +124,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
+  const showQueryDevtools =
+    process.env.NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS === "true";
+
   return (
     <QueryClientProvider client={queryClient}>
       <ControlCommandBridge />
       {children}
-      <ReactQueryDevtools initialIsOpen={false} />
+      {showQueryDevtools ? <ReactQueryDevtools initialIsOpen={false} /> : null}
     </QueryClientProvider>
   );
 }

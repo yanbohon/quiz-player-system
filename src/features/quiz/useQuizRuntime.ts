@@ -71,6 +71,17 @@ function mapQuestionType(type?: string): StandardQuestionType {
     case "填空":
     case "填空题":
       return "fill";
+    case "wordbank":
+    case "word-bank":
+    case "word-bank-fill":
+    case "wordbank-fill":
+    case "pick":
+    case "pick-fill":
+    case "选词填空":
+    case "点选题":
+    case "点选填空":
+    case "选词填空题":
+      return "wordbank";
     case "single":
     case "single-choice":
     case "单选":
@@ -479,6 +490,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       const correct = current.correctAnswer;
       if (Array.isArray(correct)) {
         if (!Array.isArray(value)) return false;
+        if (current.type === "wordbank") {
+          if (correct.length !== value.length) return false;
+          return correct.every((item, idx) => item === value[idx]);
+        }
         const sortedCorrect = [...correct].sort();
         const sortedValue = [...value].sort();
         return (

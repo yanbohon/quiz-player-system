@@ -30,6 +30,7 @@ import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
 import {
   FillDrawingBoard,
   type FillDrawingBoardHandle,
+  FillDrawingBoardEmptyError,
 } from "@/features/quiz/components/FillDrawingBoard";
 import type { SmoothSerializedStroke } from "@/features/quiz/components/SmoothDrawingCanvas";
 import styles from "./page.module.css";
@@ -72,6 +73,19 @@ function formatAnswerForQuestionSheet(
 ): string {
   if (question.type === "fill") {
     return "填空";
+  }
+
+  if (question.type === "wordbank") {
+    if (!Array.isArray(selection)) {
+      return "未选";
+    }
+    const labelMap = new Map(
+      question.options.map((option) => [option.value, option.label])
+    );
+    const labels = selection
+      .map((item) => (item ? labelMap.get(String(item)) ?? String(item) : ""))
+      .filter(Boolean);
+    return labels.length > 0 ? labels.join("/") : "未选";
   }
 
   if (Array.isArray(selection)) {
@@ -215,6 +229,59 @@ function SuccessCheckIcon({ className }: { className?: string }) {
   );
 }
 
+interface WordbankToken {
+  kind: "text" | "blank";
+  content: string;
+  blankId?: string;
+}
+
+function parseWordbankTemplate(template: string): {
+  tokens: WordbankToken[];
+  blankIds: string[];
+} {
+  const tokens: WordbankToken[] = [];
+  const blankIds: string[] = [];
+  if (!template) {
+    return { tokens: [{ kind: "text", content: "" }], blankIds };
+  }
+
+  const pattern = /{{(.*?)}}/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(template)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push({
+        kind: "text",
+        content: template.slice(lastIndex, match.index),
+      });
+    }
+
+    const rawId = (match[1] ?? "").trim();
+    const blankId = rawId || `blank${blankIds.length + 1}`;
+    tokens.push({
+      kind: "blank",
+      content: "",
+      blankId,
+    });
+    blankIds.push(blankId);
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < template.length) {
+    tokens.push({
+      kind: "text",
+      content: template.slice(lastIndex),
+    });
+  }
+
+  if (tokens.length === 0) {
+    tokens.push({ kind: "text", content: template });
+  }
+
+  return { tokens, blankIds };
+}
+
 export default function QuizPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -278,6 +345,7 @@ export default function QuizPage() {
   const lastSubmitCommandRef = useRef<number | null>(null);
   const [notifyOffset, setNotifyOffset] = useState(44);
   const [isCommandSubmissionLocked, setCommandSubmissionLocked] = useState(false);
+  const [wordbankActiveIndex, setWordbankActiveIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -319,6 +387,53 @@ export default function QuizPage() {
 
   const question = state.question;
   const questionId = question ? resolveQuestionId(question) : null;
+  const isWordbankQuestion =
+    !!question && isStandardQuestion(question) && question.type === "wordbank";
+
+  const wordbankTemplate = useMemo(() => {
+    if (!isWordbankQuestion || !question || !isStandardQuestion(question)) {
+      return null;
+    }
+    return parseWordbankTemplate(question.title);
+  }, [isWordbankQuestion, question]);
+
+  const wordbankOptionLabelMap = useMemo(() => {
+    if (!isWordbankQuestion || !question || !isStandardQuestion(question)) {
+      return null;
+    }
+    const map = new Map<string, string>();
+    question.options.forEach((option) => {
+      map.set(option.value, option.label);
+    });
+    return map;
+  }, [isWordbankQuestion, question]);
+
+  const wordbankValues = useMemo(() => {
+    if (!isWordbankQuestion || !wordbankTemplate) return [];
+    const base = Array.isArray(selected)
+      ? selected.map((item) => (item ? String(item) : ""))
+      : [];
+    return wordbankTemplate.blankIds.map((_, index) => base[index] ?? "");
+  }, [isWordbankQuestion, selected, wordbankTemplate]);
+
+  useEffect(() => {
+    if (!isWordbankQuestion || !wordbankTemplate) return;
+    const base = Array.isArray(selected)
+      ? selected.map((item) => (item ? String(item) : ""))
+      : [];
+    const normalized = wordbankTemplate.blankIds.map((_, index) => base[index] ?? "");
+    const hasDiff =
+      normalized.length !== base.length ||
+      normalized.some((value, index) => value !== base[index]);
+    if (hasDiff) {
+      setSelected(normalized);
+    }
+  }, [isWordbankQuestion, selected, wordbankTemplate]);
+
+  const wordbankUsedValues = useMemo(
+    () => new Set(wordbankValues.filter((item) => item)),
+    [wordbankValues]
+  );
 
   const ultimateStage =
     meta.id === "ultimate-challenge"
@@ -358,7 +473,9 @@ export default function QuizPage() {
 
     if (
       isStandardQuestion(question) &&
-      (question.type === "multiple" || question.type === "indeterminate")
+      (question.type === "multiple" ||
+        question.type === "indeterminate" ||
+        question.type === "wordbank")
     ) {
       setSelected([]);
     } else if (isOceanQuestion(question)) {
@@ -408,12 +525,14 @@ export default function QuizPage() {
     const previousId = lastQuestionIdRef.current;
     if (questionId && questionId !== previousId) {
       setCommandSubmissionLocked(false);
+      setWordbankActiveIndex(null);
       lastQuestionIdRef.current = questionId;
       return;
     }
 
     if (!questionId) {
       setCommandSubmissionLocked(false);
+      setWordbankActiveIndex(null);
       lastQuestionIdRef.current = null;
     }
   }, [questionId]);
@@ -470,6 +589,68 @@ export default function QuizPage() {
   const handleMultiSelect = (values: (string | number)[]) => {
     setSelected(values.map(String));
   };
+
+  const handleWordbankBlankClick = useCallback(
+    (index: number) => {
+      if (!state.answeringEnabled) return;
+      setWordbankActiveIndex(index);
+    },
+    [state.answeringEnabled]
+  );
+
+  const handleWordbankClear = useCallback(
+    (index: number) => {
+      if (!state.answeringEnabled) return;
+      const next = [...wordbankValues];
+      if (!next[index]) {
+        setWordbankActiveIndex(index);
+        return;
+      }
+      next[index] = "";
+      setSelected(next);
+      setWordbankActiveIndex(index);
+    },
+    [state.answeringEnabled, wordbankValues]
+  );
+
+  const handleWordbankSelectOption = useCallback(
+    (optionValue: string, isUsed?: boolean) => {
+      if (!state.answeringEnabled || !wordbankTemplate) return;
+      if (isUsed) {
+        return;
+      }
+      const safeValue = String(optionValue);
+      const next = [...wordbankValues];
+
+      let targetIndex =
+        wordbankActiveIndex !== null && wordbankActiveIndex >= 0
+          ? wordbankActiveIndex
+          : next.findIndex((item) => !item);
+      if (targetIndex === -1) {
+        targetIndex =
+          wordbankActiveIndex !== null ? wordbankActiveIndex : next.length - 1;
+      }
+      if (targetIndex < 0) return;
+
+      const existingIndex = next.findIndex(
+        (item, idx) => item === safeValue && idx !== targetIndex
+      );
+      if (existingIndex !== -1) {
+        next[existingIndex] = "";
+      }
+
+      next[targetIndex] = safeValue;
+      setSelected(next);
+
+      if (targetIndex < next.length - 1) {
+        setWordbankActiveIndex(targetIndex + 1);
+      } else {
+        const hasEmpty = next.some((item) => !item);
+        setWordbankActiveIndex(hasEmpty ? 0 : null);
+      }
+    },
+    [state.answeringEnabled, wordbankTemplate, wordbankValues, wordbankActiveIndex]
+  );
 
   const handleOpenBoard = useCallback(() => {
     if (isBoardOpen || boardStatus === "success") return;
@@ -566,6 +747,32 @@ export default function QuizPage() {
             currentQuestion,
             values.length > 0 ? values : null
           );
+        } else if (currentQuestion.type === "wordbank") {
+          const { blankIds } = parseWordbankTemplate(currentQuestion.title);
+          const values = Array.isArray(resolvedSelection)
+            ? resolvedSelection.map(String)
+            : typeof resolvedSelection === "string" && resolvedSelection
+            ? [resolvedSelection]
+            : [];
+          const normalizedValues = blankIds.length
+            ? blankIds.map((_, index) => values[index] ?? "")
+            : values;
+          const hasEmpty =
+            blankIds.length > 0
+              ? normalizedValues.some((item) => !item)
+              : normalizedValues.length === 0 || normalizedValues.some((item) => !item);
+          if (!allowEmpty && hasEmpty) {
+            Toast.warn("请完成所有填空");
+            return;
+          }
+          submissionValue = normalizedValues;
+          const labelMap = new Map(
+            currentQuestion.options.map((option) => [option.value, option.label])
+          );
+          const readable = normalizedValues
+            .map((item) => (item ? labelMap.get(item) ?? item : ""))
+            .filter(Boolean);
+          questionSheetAnswer = readable.length > 0 ? readable.join("/") : "未选";
         } else if (currentQuestion.type === "fill") {
           const value =
             typeof resolvedSelection === "string"
@@ -576,7 +783,7 @@ export default function QuizPage() {
             return;
           }
           submissionValue = value;
-          questionSheetAnswer = value || "未上传";
+          questionSheetAnswer = value || "空画板";
         } else {
           const value =
             typeof resolvedSelection === "string" ? resolvedSelection : "";
@@ -762,7 +969,7 @@ export default function QuizPage() {
           return;
         }
         try {
-          Toast.info("主持人已下达提交指令，正在上传画板");
+          Toast.info("正在上传画板");
           setBoardStatus("uploading");
           const result = await boardRef.current.exportAndUpload();
           setBoardStatus("success");
@@ -772,6 +979,12 @@ export default function QuizPage() {
           );
           setBoardOpen(false);
         } catch (error) {
+          if (error instanceof FillDrawingBoardEmptyError) {
+            setBoardStatus("success");
+            setBoardOpen(false);
+            await handleSubmit({ allowEmpty: true, source: "command" });
+            return;
+          }
           console.error("画板上传失败", error);
           setBoardStatus("error");
         }
@@ -869,6 +1082,39 @@ export default function QuizPage() {
             );
           })}
         </Checkbox.Group>
+      );
+    }
+
+    if (standard.type === "wordbank") {
+      return (
+        <div className={styles.wordbankOptions}>
+          {standard.options.map((option) => {
+            const isUsed = wordbankUsedValues.has(option.value);
+            const active =
+              wordbankActiveIndex !== null &&
+              wordbankActiveIndex >= 0 &&
+              option.value === wordbankValues[wordbankActiveIndex];
+            const buttonClass = [
+              styles.wordbankOption,
+              isUsed ? styles.wordbankOptionUsed : "",
+              active ? styles.wordbankOptionActive : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={buttonClass}
+                onClick={() => handleWordbankSelectOption(option.value, isUsed)}
+                disabled={!state.answeringEnabled}
+              >
+                <span className={styles.wordbankOptionBadge}>{option.value}</span>
+                <span className={styles.wordbankOptionLabel}>{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
       );
     }
 
@@ -1095,6 +1341,56 @@ export default function QuizPage() {
     }
 
     if (isStandardQuestion(question)) {
+      const questionTitleNode = (() => {
+        if (isWordbankQuestion && wordbankTemplate) {
+          let blankCursor = -1;
+          return (
+            <h2 className={`${styles.questionTitle} ${styles.wordbankTitle}`}>
+              {wordbankTemplate.tokens.map((token, index) => {
+                if (token.kind === "text") {
+                  return (
+                    <span key={`wb-text-${index}`} className={styles.wordbankText}>
+                      {token.content}
+                    </span>
+                  );
+                }
+
+                blankCursor += 1;
+                const blankIndex = blankCursor;
+                const value = wordbankValues[blankIndex] ?? "";
+                const label = value
+                  ? wordbankOptionLabelMap?.get(value) ?? value
+                  : null;
+                const hasAllFilled = wordbankValues.every((item) => item && item.trim());
+                const isActive =
+                  !hasAllFilled && wordbankActiveIndex === blankIndex;
+
+                return (
+                  <button
+                    key={`wb-blank-${token.blankId}-${index}`}
+                    type="button"
+                    className={`${styles.wordbankBlank} ${value ? styles.wordbankBlankFilled : styles.wordbankBlankEmpty} ${isActive ? styles.wordbankBlankActive : ""}`}
+                    onClick={() =>
+                      value
+                        ? handleWordbankClear(blankIndex)
+                        : handleWordbankBlankClick(blankIndex)
+                    }
+                    disabled={!state.answeringEnabled}
+                  >
+                    {label ? (
+                      <span className={styles.wordbankBlankValue}>{label}</span>
+                    ) : (
+                      <span className={styles.wordbankBlankPlaceholder}>点击填空</span>
+                    )}
+                  </button>
+                );
+              })}
+            </h2>
+          );
+        }
+
+        return <h2 className={styles.questionTitle}>{question.title}</h2>;
+      })();
       return (
         <>
           <div className={styles.questionHeader}>
@@ -1108,7 +1404,11 @@ export default function QuizPage() {
                   ? "不定项选择题"
                   : question.type === "boolean"
                   ? "判断题"
-                  : "填空题"}
+                  : question.type === "wordbank"
+                  ? "点选题"
+                  : question.type === "fill"
+                  ? "填空题"
+                  : "题目"}
               </span>
               {meta.id === "ultimate-challenge" && ultimateStage === "answer" ? (
                 <Tag type="primary" size="small" className={styles.answeringTag}>
@@ -1121,7 +1421,7 @@ export default function QuizPage() {
               {showProgress && totalQuestions ? ` / ${totalQuestions}` : ""}
             </span>
           </div>
-          <h2 className={styles.questionTitle}>{question.title}</h2>
+          {questionTitleNode}
           {isCommandSubmissionLocked ? (
             renderCommandSubmissionResult()
           ) : (

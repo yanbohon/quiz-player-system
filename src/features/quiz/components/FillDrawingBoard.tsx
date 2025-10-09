@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Loading, Popup, Toast } from "@arco-design/mobile-react";
+import { Loading, Popup } from "@arco-design/mobile-react";
 import {
   SmoothDrawingCanvas,
   type SmoothDrawingCanvasHandle,
@@ -17,6 +17,13 @@ import {
 } from "./SmoothDrawingCanvas";
 import { uploadDatasheetAttachment } from "@/lib/fusionClient";
 import styles from "./FillDrawingBoard.module.css";
+import type { StaticImageData } from "next/image";
+import undoIcon from "@/components/icons/undo.svg";
+import redoIcon from "@/components/icons/redo.svg";
+import trashIcon from "@/components/icons/trash.svg";
+import penIcon from "@/components/icons/pen.svg";
+import eraserIcon from "@/components/icons/eraser.svg";
+import { Toast } from "@/lib/arco";
 
 const PEN_COLOR = "#111827";
 
@@ -30,6 +37,16 @@ export interface FillDrawingBoardPayload {
   token: string;
   preview: string;
   paths: SmoothSerializedStroke[];
+}
+
+export class FillDrawingBoardEmptyError extends Error {
+  code: "EMPTY_BOARD";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "FillDrawingBoardEmptyError";
+    this.code = "EMPTY_BOARD";
+  }
 }
 
 export interface FillDrawingBoardProps {
@@ -49,68 +66,45 @@ export interface FillDrawingBoardHandle {
   exportAndUpload: () => Promise<FillDrawingBoardPayload>;
 }
 
-function UndoIcon() {
+function MaskIcon({ source, className }: { source: StaticImageData; className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className={styles.iconGlyph}>
-      <path
-        d="M9.5 6.5 5 11l4.5 4.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M19 17a7.5 7.5 0 0 0-7.5-7.5H5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <span
+      aria-hidden="true"
+      className={className ? `${styles.iconGlyph} ${className}` : styles.iconGlyph}
+      style={{
+        WebkitMaskImage: `url(${source.src})`,
+        maskImage: `url(${source.src})`,
+      }}
+    />
   );
 }
 
-function RedoIcon() {
+function RotateDeviceIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className={styles.iconGlyph}>
-      <path
-        d="M14.5 6.5 19 11l-4.5 4.5"
+    <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false" className={className}>
+      <rect
+        x="10"
+        y="6"
+        width="28"
+        height="36"
+        rx="4"
+        ry="4"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeWidth="3"
       />
       <path
-        d="M5 17a7.5 7.5 0 0 1 7.5-7.5H19"
+        d="M16 40c0 2 1.6 2 4 2h8c2.4 0 4 0 4-2"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="3"
         strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function ClearIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className={styles.iconGlyph}>
-      <path
-        d="M4 7h16M9 7V5h6v2m-.5 12h-5a1.5 1.5 0 0 1-1.5-1.5V7h8v10.5A1.5 1.5 0 0 1 14.5 19Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
       <path
-        d="M10 10.5 14 15m0-4.5-4 4.5"
+        d="m6 18 4-4 4 4m24 12-4 4-4-4"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.6"
+        strokeWidth="3"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -145,6 +139,12 @@ export const FillDrawingBoard = forwardRef<
   const [uploading, setUploading] = useState(false);
   const [erasing, setErasing] = useState(false);
   const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
+  const [showOrientationHint, setShowOrientationHint] = useState(false);
+  const [isPortraitViewport, setIsPortraitViewport] = useState<boolean>(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function")
+      return false;
+    return window.matchMedia("(orientation: portrait)").matches;
+  });
   const handleHistoryChange = useCallback((info: { canUndo: boolean; canRedo: boolean }) => {
     setHistoryState(info);
   }, []);
@@ -154,6 +154,25 @@ export const FillDrawingBoard = forwardRef<
   useEffect(() => {
     cachedInitialPaths.current = initialPaths ?? null;
   }, [initialPaths]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(orientation: portrait)");
+    const update = () => {
+      const portrait = media.matches;
+      setIsPortraitViewport(portrait);
+      if (!portrait) {
+        setShowOrientationHint(false);
+      }
+    };
+    update();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -166,6 +185,24 @@ export const FillDrawingBoard = forwardRef<
       setPaths([]);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setShowOrientationHint(false);
+      return;
+    }
+    if (!isPortraitViewport) {
+      setShowOrientationHint(false);
+      return;
+    }
+    setShowOrientationHint(true);
+    const timer = window.setTimeout(() => {
+      setShowOrientationHint(false);
+    }, 4000);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isPortraitViewport, open]);
 
   const handlePathsChange = (updated: SmoothSerializedStroke[]) => {
     cachedInitialPaths.current = updated;
@@ -213,9 +250,9 @@ export const FillDrawingBoard = forwardRef<
       throw new Error(message);
     }
     if (!hasStrokes) {
-      const message = "画板为空，请完成作答后等待提交指令";
+      const message = "提交了空画板";
       Toast.warn(message);
-      throw new Error(message);
+      throw new FillDrawingBoardEmptyError(message);
     }
 
     const job = (async () => {
@@ -275,6 +312,10 @@ export const FillDrawingBoard = forwardRef<
     [uploadDrawing]
   );
 
+  const dismissOrientationHint = useCallback(() => {
+    setShowOrientationHint(false);
+  }, []);
+
   return (
     <Popup
       visible={open}
@@ -286,96 +327,111 @@ export const FillDrawingBoard = forwardRef<
       getScrollContainer={() => scrollContainerRef.current}
       unmountOnExit={false}
     >
-      <div className={styles.boardContainer} ref={scrollContainerRef}>
-        <div className={styles.canvasShell}>
-          {uploading ? (
-            <div className={styles.loadingMask}>
-              <Loading type="spin" />
-              <span>正在上传...</span>
+      <div className={styles.orientationViewport}>
+        <div className={styles.orientationContent}>
+          <div className={styles.boardContainer} ref={scrollContainerRef}>
+            <div className={styles.canvasShell}>
+              {uploading ? (
+                <div className={styles.loadingMask}>
+                  <Loading type="spin" />
+                  <span>正在上传...</span>
+                </div>
+              ) : null}
+              <SmoothDrawingCanvas
+                ref={canvasRef}
+                className={styles.canvasSurface}
+                color={strokeColor}
+                size={16}
+                mode={erasing ? "eraser" : "pen"}
+                onChange={handlePathsChange}
+                onHistoryChange={handleHistoryChange}
+                viewportOrientation={isPortraitViewport ? "portrait" : "landscape"}
+              />
             </div>
-          ) : null}
-          <SmoothDrawingCanvas
-            ref={canvasRef}
-            className={styles.canvasSurface}
-            color={strokeColor}
-            size={16}
-            mode={erasing ? "eraser" : "pen"}
-            onChange={handlePathsChange}
-            onHistoryChange={handleHistoryChange}
-          />
-        </div>
 
-        <div className={styles.overlayTop}>
-          <div className={styles.topLeft}>
-            <div className={styles.titleCluster}>
-              <div className={styles.boardTitle}>画板作答</div>
+            <div className={styles.overlayTop}>
+              <div className={styles.topLeft}>
+                {questionTitle ? (
+                  <p className={styles.boardQuestion}>{questionTitle}</p>
+                ) : null}
+                {status === "error" ? (
+                  <div className={styles.errorBadge}>
+                    上传失败，请检查网络后等待主持人再次提交
+                  </div>
+                ) : null}
+              </div>
+              <div className={styles.topRight}>
+                <div className={styles.topRightBar}>
+                  <div className={styles.barSection}>
+                    <button
+                      type="button"
+                      className={`${styles.barButton} ${styles.barButtonNeutral}`}
+                      onClick={handleUndo}
+                      disabled={!canUndo}
+                    >
+                      <MaskIcon source={undoIcon} />
+                      <span className={styles.barButtonLabel}>撤销</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.barButton} ${styles.barButtonNeutral}`}
+                      onClick={handleRedo}
+                      disabled={!canRedo}
+                    >
+                      <MaskIcon source={redoIcon} />
+                      <span className={styles.barButtonLabel}>重做</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.barButton} ${styles.barButtonNeutral}`}
+                      onClick={handleClear}
+                      disabled={!canUndo}
+                    >
+                      <MaskIcon source={trashIcon} />
+                      <span className={styles.barButtonLabel}>清空</span>
+                    </button>
+                  </div>
+                  <span className={styles.barDivider} aria-hidden="true" />
+                  <div className={styles.barSection}>
+                    <button
+                      type="button"
+                      className={`${styles.barButton} ${styles.barButtonPen} ${
+                        !erasing ? styles.barButtonPenActive : ""
+                      }`}
+                      onClick={activatePen}
+                      disabled={interactiveDisabled}
+                    >
+                      <MaskIcon source={penIcon} />
+                      <span className={styles.barButtonLabel}>画笔</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.barButton} ${styles.barButtonEraser} ${
+                        erasing ? styles.barButtonEraserActive : ""
+                      }`}
+                      onClick={toggleEraser}
+                      disabled={interactiveDisabled}
+                    >
+                      <MaskIcon source={eraserIcon} />
+                      <span className={styles.barButtonLabel}>橡皮</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          <div className={styles.topCenter}>
-            {questionTitle ? (
-              <p className={styles.boardQuestion}>{questionTitle}</p>
-            ) : null}
-            {status === "error" ? (
-              <div className={styles.errorBadge}>上传失败，请检查网络后等待主持人再次提交</div>
-            ) : null}
-          </div>
-          <div className={styles.topRight}>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={handleUndo}
-              disabled={!canUndo}
-              aria-label="撤销"
-            >
-              <UndoIcon />
-            </button>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={handleRedo}
-              disabled={!canRedo}
-              aria-label="重做"
-            >
-              <RedoIcon />
-            </button>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={handleClear}
-              disabled={!canUndo}
-              aria-label="清空画板"
-            >
-              <ClearIcon />
-            </button>
           </div>
         </div>
-
-        <div className={styles.overlayBottom}>
-          <div className={styles.toolDock}>
-            <div className={styles.toolGroup}>
-              <button
-                type="button"
-                className={`${styles.toolChip} ${!erasing ? styles.toolChipActive : ""}`}
-                onClick={activatePen}
-                disabled={interactiveDisabled}
-              >
-                画笔
-              </button>
-              <button
-                type="button"
-                className={`${styles.toolChip} ${erasing ? styles.toolChipActive : ""}`}
-                onClick={toggleEraser}
-                disabled={interactiveDisabled}
-              >
-                橡皮
-              </button>
-            </div>
-            <div className={styles.toolPagination}>
-              <span className={styles.pageDot} />
-              <span className={`${styles.pageDot} ${styles.pageDotInactive}`} />
-            </div>
-          </div>
-        </div>
+        <button
+          type="button"
+          className={`${styles.orientationHint} ${
+            showOrientationHint ? "" : styles.orientationHintHidden
+          }`}
+          onClick={dismissOrientationHint}
+          aria-live="polite"
+        >
+          <RotateDeviceIcon className={styles.orientationHintIcon} />
+          <span className={styles.orientationHintText}>为获得更好体验，请横置您的设备</span>
+        </button>
       </div>
     </Popup>
   );

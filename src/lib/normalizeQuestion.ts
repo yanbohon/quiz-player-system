@@ -26,11 +26,7 @@ export function normalizeQuestion(
         type: String(q?.type ?? ""),
         content: String(q?.title ?? ""),
         options: extractTiHaiOptions(q?.options),
-        answer: Array.isArray(q?.answer)
-          ? q.answer.map((item) => String(item))
-          : String(q?.answer ?? "")
-              .split("")
-              .filter(Boolean),
+        answer: normalizeAnswerValue(q?.answer),
         explanation: typeof q?.explanation === "string" ? q.explanation : undefined,
         difficulty:
           typeof q?.difficulty === "number" ? q.difficulty : undefined,
@@ -57,9 +53,7 @@ export function normalizeQuestion(
       type: String(fields?.type ?? ""),
       content: String(fields?.stem ?? ""),
       options,
-      answer: String(fields?.answer ?? "")
-        .split("")
-        .filter(Boolean),
+      answer: normalizeAnswerValue(fields?.answer),
       explanation: undefined,
       difficulty: undefined,
       audioUrl: audioCandidate ? String(audioCandidate) : undefined,
@@ -84,12 +78,13 @@ function parseOptions(
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const match = line.match(/^([A-Z])、?(.*)$/);
+      const match = line.trim().match(/^([A-Z])[\s．。\.、，)）-]*?(.*)$/);
       if (match) {
         const [, value, text] = match;
-        return { value, text: text.trim() };
+        const label = sanitizeOptionText(text, value);
+        return { value, text: label };
       }
-      return { value: "", text: line.trim() };
+      return { value: "", text: sanitizeOptionText(line) };
     });
 }
 
@@ -106,9 +101,11 @@ function extractTiHaiOptions(
   if (!Array.isArray(rawOptions)) return [];
   return rawOptions.map((item) => {
     const option = asObject(item);
+    const rawValue = String(option?.value ?? "");
+    const rawText = String(option?.text ?? "");
     return {
-      text: String(option?.text ?? ""),
-      value: String(option?.value ?? ""),
+      text: sanitizeOptionText(rawText, rawValue || undefined),
+      value: rawValue,
     };
   });
 }
@@ -161,4 +158,69 @@ function cloneRecord(
 ): Record<string, unknown> | undefined {
   if (!input) return undefined;
   return { ...input };
+}
+
+function normalizeAnswerValue(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item)).filter(Boolean);
+  }
+
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+
+  const rawString = String(raw).trim();
+  if (!rawString) return [];
+
+  if (rawString.startsWith("[") && rawString.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(rawString);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item)).filter(Boolean);
+      }
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("Failed to parse answer JSON", error);
+      }
+    }
+  }
+
+  if (rawString.includes(",") || rawString.includes("，")) {
+    return rawString
+      .split(/[,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return rawString.split("").filter(Boolean);
+}
+
+function sanitizeOptionText(raw: string, leadingKey?: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+
+  const targetKey = leadingKey && leadingKey.length > 0 ? leadingKey : trimmed.charAt(0);
+  const escapedKey = targetKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const markerRegex = new RegExp(
+    `^${escapedKey}[\\s\\.．。:：、，,\\-\\)）]+(.+)$`,
+    "i"
+  );
+
+  const match = markerRegex.exec(trimmed);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+
+  const genericRegex = /^([A-Za-z0-9]+)[\s\\.．。:：、，,\-\\)）]+(.*)$/;
+  const genericMatch = genericRegex.exec(trimmed);
+  if (genericMatch && genericMatch[2]) {
+    return genericMatch[2].trim();
+  }
+
+  const punctuationTrimmed = trimmed.replace(/^[\\s\\.．。:：、，,\\-\\)）]+/, "").trim();
+  if (punctuationTrimmed && punctuationTrimmed !== trimmed) {
+    return punctuationTrimmed;
+  }
+
+  return trimmed;
 }

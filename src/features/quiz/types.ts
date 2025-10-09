@@ -34,7 +34,8 @@ export type StandardQuestionType =
   | "multiple"
   | "indeterminate"
   | "boolean"
-  | "fill";
+  | "fill"
+  | "wordbank";
 
 export interface StandardQuestionOption {
   value: string;

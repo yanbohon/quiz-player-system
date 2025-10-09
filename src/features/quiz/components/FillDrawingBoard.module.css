@@ -2,10 +2,42 @@
   background: #050914;
 }
 
-.boardContainer {
+.orientationViewport {
   position: relative;
   width: 100vw;
+  width: 100dvw;
   height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orientationContent {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+@media (orientation: portrait) {
+  .orientationContent {
+    width: 100vh;
+    width: 100dvh;
+    height: 100vw;
+    height: 100dvw;
+    transform: rotate(90deg);
+    transform-origin: center;
+  }
+}
+
+.boardContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   background: radial-gradient(circle at 15% 20%, rgba(59, 130, 246, 0.12), transparent 60%),
     radial-gradient(circle at 85% 15%, rgba(99, 102, 241, 0.16), transparent 55%),
@@ -43,69 +75,50 @@
   backdrop-filter: blur(4px);
 }
 
-.overlayTop,
-.overlayBottom {
+.overlayTop {
   position: absolute;
   left: 0;
   width: 100%;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  justify-content: flex-start;
+  align-items: stretch;
   padding: clamp(16px, 4vw, 28px);
   pointer-events: none;
   z-index: 4;
+  column-gap: clamp(14px, 5vw, 40px);
 }
 
 .overlayTop {
   top: 0;
 }
 
-.overlayBottom {
-  bottom: 0;
-  justify-content: center;
-}
-
 .topLeft {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: min(40vw, 320px);
+  max-width: none;
   pointer-events: auto;
-}
-
-.titleCluster {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.topCenter {
+  align-items: flex-start;
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
-  pointer-events: auto;
-}
-
-.boardTitle {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: #1f2937;
+  min-width: 0;
+  margin-right: clamp(12px, 4vw, 32px);
 }
 
 .boardQuestion {
   margin: 0;
-  font-size: clamp(14px, 3.8vw, 18px);
+  font-size: clamp(13px, 3.8vw, 13px);
   line-height: 1.5;
   color: #1f2937;
   padding: 12px 16px;
-  border-radius: 14px;
+  border-radius: 13px;
   background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.2);
-  text-align: center;
+  box-shadow:  0px 0px .5px rgba(0, 0, 0, .3), 0px 1px 3px rgba(0, 0, 0, .15);
+  text-align: left;
+  display: inline-flex;
+  max-width: 100%;
+  width: auto;
+  align-self: flex-start;
+  word-break: break-word;
 }
 
 .errorBadge {
@@ -116,116 +129,169 @@
   font-size: 13px;
   line-height: 1.4;
   max-width: min(70vw, 520px);
-  text-align: center;
+  text-align: left;
 }
 
 .topRight {
+  pointer-events: auto;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.topRightBar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  pointer-events: auto;
+  gap: clamp(10px, 3.5vw, 20px);
+  padding: 10px clamp(14px, 3vw, 22px);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0px 0px .5px rgba(0, 0, 0, .3), 0px 1px 3px rgba(0, 0, 0, .15);
 }
 
-.iconButton {
-  width: 42px;
-  height: 42px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  background: rgba(15, 23, 42, 0.62);
-  color: #e2e8f0;
+.barSection {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 2.6vw, 16px);
+}
+
+.barDivider {
+  width: 1px;
+  align-self: stretch;
+  background: rgba(148, 163, 184, 0.26);
+}
+
+.barButton {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
+  height: 60px;
+  min-width: 64px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.1;
+  color: #1f2937;
+  background: #f3f4f6;
   cursor: pointer;
-  transition: background 0.25s ease, transform 0.18s ease, border-color 0.25s ease;
+  transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease, transform 0.18s ease;
 }
 
-.iconButton:disabled {
+.barButton:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.barButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
 }
 
-.iconButton:not(:disabled):active {
-  transform: scale(0.95);
+.barButtonNeutral {
+  border-color: rgba(209, 213, 219, 0.9);
+}
+
+.barButtonNeutral:not(:disabled):hover {
+  background: #e5e7eb;
+}
+
+.barButtonPen {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.38);
+  color: #1d4ed8;
+}
+
+.barButtonPenActive {
+  background: #3b82f6;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.barButtonEraser {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #be123c;
+}
+
+.barButtonEraserActive {
+  background: #f87171;
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+.barButtonLabel {
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .iconGlyph {
   width: 20px;
   height: 20px;
+  display: inline-block;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
 }
 
-.toolDock {
-  pointer-events: auto;
-  width: min(92vw, 740px);
+.orientationHint {
+  position: absolute;
+  bottom: clamp(16px, 6vw, 32px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: clamp(12px, 4vw, 28px);
-  padding: 14px clamp(24px, 6vw, 40px);
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.78);
-  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.45), inset 0 0 0 1px rgba(148, 163, 184, 0.15);
-}
-
-.toolGroup {
-  display: flex;
-  align-items: center;
-  gap: clamp(12px, 4vw, 24px);
-}
-
-.toolPagination {
-  margin-left: clamp(12px, 4vw, 28px);
-}
-
-.toolChip {
+  gap: 12px;
   padding: 10px 20px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(15, 23, 42, 0.65);
-  color: #e2e8f0;
-  font-size: 13px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.35);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: auto;
   cursor: pointer;
-  transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+  font-size: 13px;
+  line-height: 1.4;
+  z-index: 6;
+  opacity: 1;
 }
 
-.toolChipActive {
-  background: rgba(59, 130, 246, 0.28);
-  border-color: rgba(59, 130, 246, 0.48);
+.orientationHintHidden {
+  opacity: 0;
+  transform: translate(-50%, 14px);
+  pointer-events: none;
+}
+
+.orientationHintIcon {
+  width: 24px;
+  height: 24px;
   color: #bfdbfe;
 }
 
-.toolChip:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.orientationHintText {
+  white-space: nowrap;
 }
 
-.toolPagination {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  pointer-events: auto;
-  color: rgba(226, 232, 240, 0.8);
-}
-
-.pageDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.pageDotInactive {
-  opacity: 0.4;
+@media (orientation: landscape) {
+  .orientationHint {
+    display: none;
+  }
 }
 
 @media (orientation: portrait) {
   .boardQuestion {
-    max-width: min(92vw, 520px);
+    max-width: none;
   }
 
-  .overlayTop,
-  .overlayBottom {
+  .overlayTop {
     padding-left: clamp(12px, 4vw, 24px);
     padding-right: clamp(12px, 4vw, 24px);
   }
