@@ -1,0 +1,18 @@
+.canvasRoot {
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.canvasRoot svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.strokeLayer {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: url(#pf-shadow);
+}

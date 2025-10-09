@@ -1,0 +1,115 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #f6f9ff 0%, #ffffff 100%);
+}
+
+.fallback {
+  margin: 120px auto 0;
+  color: #4b4b4b;
+  font-size: 16px;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px 40px;
+  gap: 24px;
+}
+
+.notice {
+  width: 100%;
+  max-width: 520px;
+  border-radius: 12px;
+  background: rgba(22, 93, 255, 0.08);
+}
+
+.card {
+  width: 100%;
+  max-width: 520px;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 28px 24px 32px;
+  box-shadow: 0 20px 46px rgba(15, 23, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 36px;
+  background: linear-gradient(140deg, #165dff 0%, #458fff 100%);
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+}
+
+.info {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.name {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.team {
+  font-size: 14px;
+  color: #2563eb;
+}
+
+.statusList {
+  width: 100%;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(249, 250, 251, 0.7);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.loadingText {
+  margin: 0;
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.actions {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 480px) {
+  .card {
+    padding: 24px 20px 28px;
+  }
+
+  .avatar {
+    width: 64px;
+    height: 64px;
+    font-size: 26px;
+  }
+}

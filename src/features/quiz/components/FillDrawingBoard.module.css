@@ -1,0 +1,236 @@
+.popupContent {
+  background: #050914;
+}
+
+.boardContainer {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: radial-gradient(circle at 15% 20%, rgba(59, 130, 246, 0.12), transparent 60%),
+    radial-gradient(circle at 85% 15%, rgba(99, 102, 241, 0.16), transparent 55%),
+    #eef2ff;
+}
+
+.canvasShell {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: #f7f8fb;
+  background-image: radial-gradient(circle at center, rgba(148, 163, 184, 0.45) 2px, transparent 2px);
+  background-size: 48px 48px;
+}
+
+.canvasSurface {
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  background: transparent;
+}
+
+.loadingMask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 3;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.overlayTop,
+.overlayBottom {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: clamp(16px, 4vw, 28px);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.overlayTop {
+  top: 0;
+}
+
+.overlayBottom {
+  bottom: 0;
+  justify-content: center;
+}
+
+.topLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: min(40vw, 320px);
+  pointer-events: auto;
+}
+
+.titleCluster {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topCenter {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.boardTitle {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #1f2937;
+}
+
+.boardQuestion {
+  margin: 0;
+  font-size: clamp(14px, 3.8vw, 18px);
+  line-height: 1.5;
+  color: #1f2937;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.2);
+  text-align: center;
+}
+
+.errorBadge {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(248, 113, 113, 0.25);
+  color: #fecaca;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: min(70vw, 520px);
+  text-align: center;
+}
+
+.topRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.iconButton {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.62);
+  color: #e2e8f0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.25s ease, transform 0.18s ease, border-color 0.25s ease;
+}
+
+.iconButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.iconButton:not(:disabled):active {
+  transform: scale(0.95);
+}
+
+.iconGlyph {
+  width: 20px;
+  height: 20px;
+}
+
+.toolDock {
+  pointer-events: auto;
+  width: min(92vw, 740px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 4vw, 28px);
+  padding: 14px clamp(24px, 6vw, 40px);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.78);
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.45), inset 0 0 0 1px rgba(148, 163, 184, 0.15);
+}
+
+.toolGroup {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 4vw, 24px);
+}
+
+.toolPagination {
+  margin-left: clamp(12px, 4vw, 28px);
+}
+
+.toolChip {
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.65);
+  color: #e2e8f0;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+}
+
+.toolChipActive {
+  background: rgba(59, 130, 246, 0.28);
+  border-color: rgba(59, 130, 246, 0.48);
+  color: #bfdbfe;
+}
+
+.toolChip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toolPagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+  color: rgba(226, 232, 240, 0.8);
+}
+
+.pageDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pageDotInactive {
+  opacity: 0.4;
+}
+
+@media (orientation: portrait) {
+  .boardQuestion {
+    max-width: min(92vw, 520px);
+  }
+
+  .overlayTop,
+  .overlayBottom {
+    padding-left: clamp(12px, 4vw, 24px);
+    padding-right: clamp(12px, 4vw, 24px);
+  }
+
+  .topRight {
+    gap: 10px;
+  }
+}

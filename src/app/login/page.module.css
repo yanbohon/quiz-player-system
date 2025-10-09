@@ -1,0 +1,83 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #f5f7ff 0%, #ffffff 100%);
+}
+
+.fallback {
+  margin: 120px auto 0;
+  color: #4b4b4b;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 24px 16px 40px;
+  gap: 24px;
+  overflow-y: auto;
+}
+
+.notice {
+  width: 100%;
+  max-width: 640px;
+  border-radius: 12px;
+  background: rgba(22, 93, 255, 0.08);
+}
+
+.grid {
+  width: 100%;
+  max-width: 640px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 18px;
+  padding-bottom: 16px;
+}
+
+.stationButton {
+  height: 104px;
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.16);
+  color: #ffffff;
+}
+
+.stationName {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.stationId {
+  font-size: 14px;
+  letter-spacing: 0.4px;
+  opacity: 0.85;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.active {
+  box-shadow: 0 22px 44px rgba(22, 93, 255, 0.25);
+}
+
+@media (max-width: 480px) {
+  .body {
+    padding: 20px 12px 32px;
+  }
+
+  .grid {
+    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  }
+
+  .stationButton {
+    height: 92px;
+  }
+}

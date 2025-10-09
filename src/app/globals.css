@@ -1,0 +1,44 @@
+/* 引入 Arco Design Mobile 样式 */
+@import "@arco-design/mobile-react/dist/style.css";
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html {
+  /* 
+   * 基准字体大小由 @arco-design/mobile-react/tools/flexible 动态设置
+   * @base-font-size: 50px (1rem = 50px)
+   * UI稿宽度: 375px
+   * 计算规则: fontSize = (屏幕宽度 / 375) * 50
+   * 例如：375px 屏幕 = 50px, 750px 屏幕 = 100px
+   * 最大限制: 64px
+   */
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 移动端优化 */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* 固定 Tanstack Query Devtools 的基准字体，避免 Flexible 自适应影响大小 */
+.tsqd-parent-container {
+  font-size: 16px !important;
+}
