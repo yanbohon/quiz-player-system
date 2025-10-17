@@ -45,14 +45,10 @@ export default function LoginPage() {
     router.replace("/waiting");
   };
 
-  const handleBack = () => {
-    router.back();
-  };
-
   return (
     <div className={styles.page}>
       <ArcoClient fallback={<div className={styles.fallback}>页面加载中...</div>}>
-        <NavBar title="选手登录" onClickLeft={handleBack} />
+        <NavBar title="选手登录" leftContent={null} />
 
         <div className={styles.body}>
           <NoticeBar className={styles.notice} marquee="none">

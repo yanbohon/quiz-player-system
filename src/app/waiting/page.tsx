@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
-import { Button, Cell, Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
+import { Cell, Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
@@ -10,6 +11,7 @@ import { mqttService } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
 import { MQTT_TOPICS } from "@/config/control";
+import LogoutIcon from "@/components/icons/logout.svg";
 import styles from "./page.module.css";
 
 export default function WaitingPage() {
@@ -43,11 +45,7 @@ export default function WaitingPage() {
     return "?";
   };
 
-  const handleStartQuiz = () => {
-    router.push("/quiz");
-  };
-
-  const handleReturnToLogin = () => {
+  const handleLogout = () => {
     if (user?.id && mqttService.isConnected()) {
       try {
         mqttService.publish(MQTT_TOPICS.stateForClient(user.id), "offline", { qos: 0, retain: true });
@@ -62,7 +60,22 @@ export default function WaitingPage() {
   return (
     <div className={styles.page}>
       <ArcoClient fallback={<div className={styles.fallback}>加载中...</div>}>
-        <NavBar title="比赛等待区" onClickLeft={() => router.push("/")} />
+        <NavBar
+          title="比赛等待区"
+          leftContent={null}
+          rightContent={
+            <button type="button" className={styles.logoutButton} onClick={handleLogout}>
+              <Image
+                src={LogoutIcon}
+                alt="退出登录"
+                width={24}
+                height={24}
+                className={styles.logoutIcon}
+                priority
+              />
+            </button>
+          }
+        />
 
         <div className={styles.body}>
           <NoticeBar className={styles.notice} marquee="none">
@@ -99,15 +112,6 @@ export default function WaitingPage() {
               <Loading type="spin" stroke={3} />
               <p className={styles.loadingText}>等待主持人开始比赛...</p>
             </div>
-          </div>
-
-          <div className={styles.actions}>
-            <Button type="primary" onClick={handleStartQuiz}>
-              主持人已宣布开始，进入答题
-            </Button>
-            <Button type="ghost" onClick={handleReturnToLogin}>
-              返回登录修改信息
-            </Button>
           </div>
         </div>
       </ArcoClient>

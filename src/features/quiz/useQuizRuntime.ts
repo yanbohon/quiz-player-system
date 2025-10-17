@@ -1,15 +1,21 @@
+'use client';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { Toast } from "@/lib/arco";
 import { API_ENDPOINTS } from "@/constants";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
+import { ApiError } from "@/lib/api/client";
+import { submitGrabbedAnswer } from "@/lib/fusionClient";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
 import { CONTEST_MODES, DEFAULT_MODE } from "./modes";
 import {
   ContestModeId,
   ContestModeMeta,
   CustomOceanQuestion,
+  MatchingOption,
   QuizQuestion,
   QuizRuntime,
   QuizRuntimeState,
@@ -78,10 +84,18 @@ function mapQuestionType(type?: string): StandardQuestionType {
     case "pick":
     case "pick-fill":
     case "选词填空":
-    case "点选题":
     case "点选填空":
     case "选词填空题":
+    case "点选题":
       return "wordbank";
+    case "matching":
+    case "match":
+    case "pairing":
+    case "连线题":
+    case "配对题":
+    case "关联题":
+    case "连线":
+      return "matching";
     case "single":
     case "single-choice":
     case "单选":
@@ -106,16 +120,257 @@ function normalizedToStandardQuestion(
     correctAnswer = [...answers];
   }
 
+  const mappedType = mapQuestionType(question.type);
+  if (mappedType === "matching") {
+    const config = buildMatchingQuestion(question);
+    return {
+      id: question.id,
+      title: config.prompt ?? question.content,
+      type: "matching",
+      options: config.right.map((item) => ({
+        value: item.id,
+        label: item.label,
+      })),
+      correctAnswer: config.correctPairs.length ? [...config.correctPairs] : undefined,
+      matching: {
+        prompt: config.prompt,
+        left: config.left,
+        right: config.right,
+        maxMatchesPerLeft: config.maxMatchesPerLeft,
+      },
+    };
+  }
+
   return {
     id: question.id,
     title: question.content,
-    type: mapQuestionType(question.type),
+    type: mappedType,
     options: question.options.map((option, index) => ({
       value: option.value || String.fromCharCode(65 + index),
       label: option.text || option.value || `选项${index + 1}`,
     })),
     correctAnswer,
   };
+}
+
+function buildMatchingQuestion(question: NormalizedQuestion): {
+  prompt?: string;
+  left: MatchingOption[];
+  right: MatchingOption[];
+  correctPairs: string[];
+  maxMatchesPerLeft?: number;
+} {
+  const rawFields =
+    question.raw && typeof question.raw === "object"
+      ? (question.raw as Record<string, unknown>)
+      : {};
+
+  const { prompt, items: left } = parseMatchingStem(question.content);
+  const right = ensureMatchingOptions(question.options);
+  const answerSource =
+    rawFields?.answer ?? rawFields?.答案 ?? rawFields?.correct ?? question.answer;
+  const correctPairs = parseMatchingAnswer(answerSource);
+  const maxMatchesPerLeft = parseMaxMatchesPerLeft(rawFields);
+
+  return {
+    prompt,
+    left,
+    right,
+    correctPairs,
+    maxMatchesPerLeft,
+  };
+}
+
+function parseMatchingStem(stem?: string): {
+  prompt?: string;
+  items: MatchingOption[];
+} {
+  if (!stem) {
+    return { items: [] };
+  }
+
+  const lines = stem
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const promptLines: string[] = [];
+  const items: MatchingOption[] = [];
+
+  for (const line of lines) {
+    const match = line.match(/^(\d+)[\s\.\-:：、．，,)）]*(.*)$/);
+    if (match) {
+      const [, rawId, rawLabel] = match;
+      const id = rawId?.trim() || String(items.length + 1);
+      const label = rawLabel?.trim() || line;
+
+      if (!label) continue;
+
+      items.push({
+        id,
+        label,
+      });
+      continue;
+    }
+
+    if (items.length === 0) {
+      promptLines.push(line);
+      continue;
+    }
+
+    // Treat trailing non-numbered lines as continuation of previous label
+    const previous = items[items.length - 1];
+    if (previous) {
+      previous.label = `${previous.label} ${line}`.trim();
+    } else {
+      promptLines.push(line);
+    }
+  }
+
+  return {
+    prompt: promptLines.length ? promptLines.join("\n") : undefined,
+    items,
+  };
+}
+
+function ensureMatchingOptions(
+  options: Array<{ text: string; value: string }>
+): MatchingOption[] {
+  if (!Array.isArray(options) || options.length === 0) {
+    return [];
+  }
+
+  return options.map((option, index) => {
+    const fallback = String.fromCharCode(65 + index);
+    return {
+      id: option.value?.trim() || fallback,
+      label: option.text?.trim() || option.value?.trim() || fallback,
+    };
+  });
+}
+
+function parseMatchingAnswer(raw: unknown): string[] {
+  if (!raw) return [];
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return parseMatchingAnswer(parsed);
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("Failed to parse matching answer JSON", error);
+        }
+      }
+    }
+
+    if (trimmed.includes(":")) {
+      return trimmed
+        .split(/[,，;；\s]+/)
+        .map((item) => item.trim())
+        .filter((item) => item.includes(":"));
+    }
+  }
+
+  if (Array.isArray(raw)) {
+    if (raw.every((item) => typeof item === "string" && item && !item.includes(":"))) {
+      const pairs: string[] = [];
+      for (let index = 0; index < raw.length; index += 2) {
+        const left = raw[index];
+        const right = raw[index + 1];
+        if (typeof left === "string" && typeof right === "string") {
+          const leftId = left.trim();
+          const rightId = right.trim();
+          if (leftId && rightId) {
+            pairs.push(`${leftId}:${rightId}`);
+          }
+        }
+      }
+      if (pairs.length) {
+        return pairs;
+      }
+    }
+
+    const pairs = raw
+      .map((entry) => {
+        if (Array.isArray(entry) && entry.length >= 2) {
+          const [left, right] = entry;
+          return `${String(left).trim()}:${String(right).trim()}`;
+        }
+
+        if (typeof entry === "string") {
+          const trimmed = entry.trim();
+          return trimmed.includes(":") ? trimmed : "";
+        }
+
+        if (entry && typeof entry === "object") {
+          const obj = entry as Record<string, unknown>;
+          if (obj.left !== undefined && obj.right !== undefined) {
+            return `${String(obj.left).trim()}:${String(obj.right).trim()}`;
+          }
+          const entries = Object.entries(obj);
+          if (entries.length === 1) {
+            const [left, right] = entries[0];
+            return `${String(left).trim()}:${String(right).trim()}`;
+          }
+        }
+
+        return "";
+      })
+      .filter(Boolean);
+
+    return pairs;
+  }
+
+  if (raw && typeof raw === "object") {
+    const entries = Object.entries(raw as Record<string, unknown>);
+    return entries
+      .map(([left, right]) => {
+        const leftId = String(left).trim();
+        const rightId = right !== undefined ? String(right).trim() : "";
+        return leftId && rightId ? `${leftId}:${rightId}` : "";
+      })
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function parseMaxMatchesPerLeft(raw: Record<string, unknown>): number | undefined {
+  const candidateKeys = [
+    "matchingMax",
+    "maxMatchesPerLeft",
+    "maxMatches",
+    "maxMatch",
+    "左列匹配上限",
+  ];
+
+  let candidate: unknown;
+  for (const key of candidateKeys) {
+    if (raw[key] !== undefined && raw[key] !== null) {
+      candidate = raw[key];
+      break;
+    }
+  }
+
+  if (typeof candidate === "number" && Number.isFinite(candidate)) {
+    return candidate > 0 ? candidate : undefined;
+  }
+
+  if (typeof candidate === "string") {
+    const parsed = Number(candidate.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return undefined;
 }
 
 function extractStringArray(value: unknown): string[] {
@@ -165,6 +420,7 @@ function isOceanQuestion(
 }
 
 export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
+  const router = useRouter();
   const meta = useMemo(() => resolveMode(modeId), [modeId]);
 
   const {
@@ -187,6 +443,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     questions: storeQuestions,
     currentIndex: storeCurrentIndex,
     isLoading: quizLoading,
+    waitingForStageStart,
     loadQuestions,
     grabNextQuestion,
     setCurrentQuestionIndex,
@@ -195,6 +452,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       questions: state.questions,
       currentIndex: state.currentIndex,
       isLoading: state.isLoading,
+      waitingForStageStart: state.waitingForStageStart,
       loadQuestions: state.loadQuestions,
       grabNextQuestion: state.grabNextQuestion,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
@@ -216,6 +474,8 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const currentQuestionRef = useRef<QuizQuestion | undefined>(undefined);
   const localFetchInFlightRef = useRef(false);
   const pullFetchInFlightRef = useRef(false);
+  const emptyPoolHandledRef = useRef(false);
+  const initialOceanFetchAttemptedRef = useRef(false);
 
   const resetTimers = useCallback(() => {
     if (globalTimerRef.current) {
@@ -234,6 +494,28 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       answeringEnabled: false,
     }));
   }, [resetTimers]);
+
+  const handleQuestionPoolEmpty = useCallback(() => {
+    if (emptyPoolHandledRef.current) return;
+    emptyPoolHandledRef.current = true;
+    Toast.info("题库已空");
+    stopAll();
+    router.replace("/waiting");
+  }, [router, stopAll]);
+
+  useEffect(() => {
+    emptyPoolHandledRef.current = false;
+  }, [meta.id]);
+
+  useEffect(() => {
+    if (meta.id !== "ocean-adventure") {
+      initialOceanFetchAttemptedRef.current = false;
+      return;
+    }
+    if (!waitingForStageStart) {
+      initialOceanFetchAttemptedRef.current = false;
+    }
+  }, [meta.id, waitingForStageStart]);
 
   const startGlobalTimer = useCallback(
     (seconds: number) => {
@@ -442,12 +724,23 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const fetchNextGrabQuestion = useCallback(async () => {
     if (!userId) return;
     try {
-      await grabNextQuestion(userId);
+      const question = await grabNextQuestion(userId);
+      if (!question) {
+        handleQuestionPoolEmpty();
+      }
     } catch (error) {
+      if (
+        error instanceof ApiError &&
+        typeof error.message === "string" &&
+        error.message.includes("题库已空")
+      ) {
+        handleQuestionPoolEmpty();
+        return;
+      }
       console.error("题海遨游取题失败", error);
       Toast.error("获取题目失败");
     }
-  }, [grabNextQuestion, userId]);
+  }, [grabNextQuestion, handleQuestionPoolEmpty, userId]);
 
   useEffect(() => {
     if (meta.questionFlow !== "local") return;
@@ -468,7 +761,16 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   useEffect(() => {
     if (meta.questionFlow !== "pull") return;
     if (quizQuestions.length > 0) return;
+    const shouldAttemptWhileWaiting =
+      meta.id === "ocean-adventure" &&
+      waitingForStageStart &&
+      !initialOceanFetchAttemptedRef.current;
+    if (waitingForStageStart && !shouldAttemptWhileWaiting) return;
     if (!userId || pullFetchInFlightRef.current) return;
+
+    if (shouldAttemptWhileWaiting) {
+      initialOceanFetchAttemptedRef.current = true;
+    }
 
     pullFetchInFlightRef.current = true;
     fetchNextGrabQuestion().finally(() => {
@@ -478,7 +780,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     fetchNextGrabQuestion,
     meta.questionFlow,
     quizQuestions.length,
+    waitingForStageStart,
     userId,
+    meta.id,
   ]);
 
   const evaluateStandardQuestion = useCallback(
@@ -526,6 +830,21 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       const currentIndex = questionIndexRef.current;
 
       if (!currentQuestion || currentIndex < 0) return undefined;
+
+      if (meta.id === "ocean-adventure" && isOceanQuestion(currentQuestion)) {
+        if (!userId) {
+          throw new Error("缺少选手 ID，无法提交答案");
+        }
+        const answerPayload: string | string[] =
+          Array.isArray(value) && value.length === 1
+            ? value[0] ?? ""
+            : value;
+        await submitGrabbedAnswer({
+          userId,
+          questionId: currentQuestion.questionKey,
+          answer: answerPayload,
+        });
+      }
 
       const durationMs = resolveDuration();
       let isCorrect: boolean | undefined;
@@ -624,6 +943,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       setCurrentQuestionIndex,
       state.hp,
       stopAll,
+      userId,
     ]
   );
 
@@ -678,6 +998,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         return {
           ...prev,
           delegationTargetId: targetId,
+          awaitingHost: false,
           phase: isSelf ? "answer" : "locked",
           answeringEnabled: isSelf,
         };
@@ -687,17 +1008,13 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   );
 
   const triggerBuzzer = useCallback(() => {
-    setState((prev) => {
-      if (meta.id !== "ultimate-challenge") {
-        return prev;
-      }
-      return {
-        ...prev,
-        awaitingHost: false,
-        phase: "decision",
-        answeringEnabled: false,
-      };
-    });
+    if (meta.id !== "ultimate-challenge") {
+      return;
+    }
+    setState((prev) => ({
+      ...prev,
+      awaitingHost: false,
+    }));
   }, [meta.id]);
 
   const reset = useCallback(async () => {
@@ -711,7 +1028,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
 
     if (meta.questionFlow === "pull") {
-      await fetchNextGrabQuestion();
+      if (!waitingForStageStart) {
+        await fetchNextGrabQuestion();
+      }
+      return;
     }
   }, [
     clearAnswers,
@@ -720,6 +1040,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     meta.questionFlow,
     resetRuntime,
     setAppCurrentQuestion,
+    waitingForStageStart,
   ]);
 
   const startLocalTimer = useCallback(() => {

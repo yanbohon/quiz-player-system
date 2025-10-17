@@ -35,7 +35,20 @@ export type StandardQuestionType =
   | "indeterminate"
   | "boolean"
   | "fill"
-  | "wordbank";
+  | "wordbank"
+  | "matching";
+
+export interface MatchingOption {
+  id: string;
+  label: string;
+}
+
+export interface MatchingQuestionConfig {
+  prompt?: string;
+  left: MatchingOption[];
+  right: MatchingOption[];
+  maxMatchesPerLeft?: number;
+}
 
 export interface StandardQuestionOption {
   value: string;
@@ -50,6 +63,7 @@ export interface StandardQuestion {
   options: StandardQuestionOption[];
   timeLimitSeconds?: number;
   correctAnswer?: string | string[];
+  matching?: MatchingQuestionConfig;
 }
 
 export interface CustomOceanQuestion {

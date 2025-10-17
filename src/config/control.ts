@@ -32,6 +32,8 @@ const STATE_TOPIC_PREFIX = normalizeTopic(
 export const MQTT_TOPICS = {
   command: normalizeTopic(process.env.NEXT_PUBLIC_MQTT_TOPIC_COMMAND, "cmd"),
   control: normalizeTopic(process.env.NEXT_PUBLIC_MQTT_TOPIC_CONTROL, "quiz/control"),
+  buzzIn: normalizeTopic(process.env.NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN, "quiz/buzz_in"),
+  result: normalizeTopic(process.env.NEXT_PUBLIC_MQTT_TOPIC_RESULT, "quiz/result"),
   statePrefix: STATE_TOPIC_PREFIX,
   stateForClient(clientId: string) {
     return joinTopicSegments(STATE_TOPIC_PREFIX, clientId);

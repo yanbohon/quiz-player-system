@@ -46,6 +46,15 @@ interface DatasheetResponse {
 }
 
 interface GrabQuestionResponse {
+  success?: boolean;
+  message?: string;
+  question?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+interface SubmitGrabAnswerResponse {
+  success?: boolean;
+  message?: string;
   [key: string]: unknown;
 }
 
@@ -138,14 +147,74 @@ export async function fetchGrabbedQuestion(
     }
   );
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(response.status, message);
+  let data: GrabQuestionResponse | undefined;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = undefined;
   }
 
-  const data: GrabQuestionResponse = await response.json();
+  if (!response.ok) {
+    const message =
+      typeof data?.message === "string" && data.message.trim()
+        ? data.message
+        : response.statusText || "请求失败";
+    throw new ApiError(response.status, message, data);
+  }
+
+  if (data?.success === false) {
+    const message =
+      typeof data.message === "string" && data.message.trim()
+        ? data.message
+        : "题海取题失败";
+    throw new ApiError(response.status, message, data);
+  }
+
   const normalized = normalizeQuestion(data, "tihai");
   return normalized[0];
+}
+
+export async function submitGrabbedAnswer(params: {
+  userId: string;
+  questionId: string;
+  answer: string | string[];
+}): Promise<void> {
+  const payload = {
+    userId: params.userId,
+    questionId: params.questionId,
+    answer: params.answer,
+  };
+
+  const response = await fetch(resolveTihaiUrl("/submit-answer"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  let data: SubmitGrabAnswerResponse | undefined;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = undefined;
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data?.message === "string" && data.message.trim()
+        ? data.message
+        : response.statusText || "提交答案失败";
+    throw new ApiError(response.status, message, data);
+  }
+
+  if (data?.success === false) {
+    const message =
+      typeof data.message === "string" && data.message.trim()
+        ? data.message
+        : "题海答题提交失败";
+    throw new ApiError(response.status, message, data);
+  }
 }
 
 interface AttachmentUploadData {

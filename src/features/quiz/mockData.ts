@@ -29,6 +29,39 @@ export const MOCK_PUSH_QUESTIONS: StandardQuestionWithSolution[] = [
     ],
     correctAnswer: "A",
   },
+  {
+    id: "push-matching-1",
+    title: "请将以下毒品与对应特征连线。",
+    type: "matching",
+    options: [
+      { value: "A", label: "源自罂粟，成瘾强" },
+      { value: "B", label: "白色晶体，致幻觉" },
+      { value: "C", label: "源自大麻，忆衰退" },
+      { value: "D", label: "镇痛药物，管制品" },
+      { value: "E", label: "娱乐场所，易兴奋" },
+      { value: "F", label: "源古柯叶，兴中枢" },
+    ],
+    matching: {
+      prompt: "将毒品与相应特征正确连线。",
+      left: [
+        { id: "1", label: "海洛因" },
+        { id: "2", label: "冰毒" },
+        { id: "3", label: "大麻" },
+        { id: "4", label: "吗啡" },
+        { id: "5", label: "摇头丸" },
+        { id: "6", label: "可卡因" },
+      ],
+      right: [
+        { id: "A", label: "源自罂粟，成瘾强" },
+        { id: "B", label: "白色晶体，致幻觉" },
+        { id: "C", label: "源自大麻，忆衰退" },
+        { id: "D", label: "镇痛药物，管制品" },
+        { id: "E", label: "娱乐场所，易兴奋" },
+        { id: "F", label: "源古柯叶，兴中枢" },
+      ],
+    },
+    correctAnswer: ["1:A", "2:B", "3:C", "4:D", "5:E", "6:F"],
+  },
 ];
 
 export const MOCK_SPEED_RUN_QUESTIONS: StandardQuestionWithSolution[] = [
@@ -102,4 +135,3 @@ export const MOCK_OCEAN_QUESTIONS: CustomOceanQuestion[] = [
     },
   },
 ];
-

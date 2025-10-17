@@ -176,6 +176,12 @@
   gap: 10px;
 }
 
+.questionHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .questionTag {
   display: inline-flex;
   align-items: center;
@@ -193,9 +199,44 @@
   font-weight: 600;
 }
 
+.selectionSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #475569;
+  max-width: 400px;
+}
+
+.selectionSummaryLabel {
+  font-weight: 600;
+}
+
+.selectionTag {
+  border: none;
+  border-radius: 9999px !important;
+  padding: 0 10px !important;
+  font-weight: 600;
+}
+
+.selectionTagMuted {
+  border-color: rgba(148, 163, 184, 0.4);
+  color: #475569;
+  border-radius: 9999px !important;
+  padding: 0 10px !important;
+  font-weight: 600;
+}
+
 .answeringTag {
   background: rgba(22, 163, 74, 0.15) !important;
   color: #15803d !important;
+  border-radius: 9999px !important;
+  padding: 0 14px !important;
+  border: none !important;
+  font-weight: 600;
+  display: inline-flex !important;
+  align-items: center;
 }
 
 
@@ -294,24 +335,18 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 16px 26px;
+  padding: 16px 16px;
   border-radius: 999px;
-  border: 1px solid rgba(191, 219, 254, 0.8);
+  border: 3px solid #2563eb;
   background: #eff6ff;
-  color: #1d4ed8;
+  color: #000000;
   font-size: 17px;
   font-weight: 600;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+
 }
 
 .wordbankOption:not(:disabled) {
   cursor: pointer;
-}
-
-.wordbankOption:not(:disabled):hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.18);
-  border-color: #93c5fd;
 }
 
 .wordbankOptionUsed {
@@ -336,8 +371,8 @@
   width: 30px;
   height: 30px;
   border-radius: 999px;
-  background: rgba(37, 99, 235, 0.12);
-  color: #1d4ed8;
+  background: #2563eb;
+  color: #ffffff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -349,10 +384,235 @@
   white-space: nowrap;
 }
 
+.matchingBoard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  row-gap: 20px;
+  column-gap: 80px;
+  align-items: flex-start;
+  position: relative;
+}
+
+.matchingColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.matchingList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.matchingEmpty {
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #64748b;
+  font-size: 14px;
+  text-align: center;
+}
+
+.matchingLeftRow {
+  display: flex;
+  align-items: center;
+}
+
+.matchingLeftItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 3px solid #e2e8f0;
+  background: #ffffff;
+
+  text-align: left;
+}
+
+.matchingLeftItemActive {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+  background: #e4edff;
+}
+
+.matchingLeftItemMatched {
+  border-color: #2563eb;
+  background: #edf4ff;
+}
+
+.matchingLeftBadge {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.matchingLeftItemActive .matchingLeftBadge,
+.matchingLeftItemMatched .matchingLeftBadge {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.matchingLeftLabel {
+  flex: 1;
+  font-size: 16px;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.matchingRightItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 3px solid #e2e8f0;
+  background: #ffffff;
+  text-align: left;
+}
+
+.matchingRightItem:not(:disabled) {
+  cursor: pointer;
+}
+
+.matchingRightItemUsed {
+  border-color: #2563eb;
+  background: #edf4ff;
+}
+
+.matchingRightItemReassign {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.matchingRightBadge {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.matchingRightItemUsed .matchingRightBadge {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.matchingRightLabel {
+  flex: 1;
+  font-size: 16px;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.matchingRightItem:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.matchingOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 0;
+}
+
+.matchingOverlayLine {
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.72;
+  transition: opacity 0.2s ease, stroke-width 0.2s ease, filter 0.2s ease;
+}
+
+.matchingOverlayLineActive {
+  opacity: 1;
+  stroke-width: 4;
+  filter: drop-shadow(0 4px 12px rgba(37, 99, 235, 0.28));
+}
+
 .oceanHint {
   font-size: 12px;
   margin-left: 4px;
   color: #cbd5f5;
+}
+
+.questionTitleRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.questionTitleRow .questionTitle {
+  flex: 1;
+}
+
+.questionTitleAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  gap: 6px;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease,
+    opacity 0.2s ease, transform 0.2s ease;
+}
+
+.questionTitleAction:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.16);
+  border-color: rgba(220, 38, 38, 0.45);
+  transform: translateY(-1px);
+}
+
+.questionTitleAction:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.questionTitleActionIcon {
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  display: inline-block;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
 
 .questionTitle {
@@ -406,10 +666,8 @@
   width: 100%;
   box-sizing: border-box;
   border-radius: 18px;
-  border: 1px solid #e2e8f0;
+  border: 3px solid #e2e8f0;
   background: #f8fafc;
-  transition: all 0.25s ease;
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.04);
 }
 
 .optionCardActive {
@@ -458,25 +716,19 @@
 .blankBoard {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
+  align-items: stretch;
+  gap: 16px;
   padding: 48px 0;
 }
 
 .boardButton {
   width: min(280px, 80%);
   border-radius: 999px;
-}
-
-.boardHint {
-  font-size: 13px;
-  color: #94a3b8;
-  text-align: center;
-  max-width: 320px;
+  align-self: center;
 }
 
 .boardPreview {
-  width: min(320px, 90%);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -489,7 +741,7 @@
 
 .boardPreviewImage {
   width: 100%;
-  max-height: 260px;
+  height: 100%;
   border-radius: 12px;
   background: #ffffff;
   object-fit: contain;
@@ -513,6 +765,8 @@
   border-radius: 16px;
   background: rgba(34, 197, 94, 0.12);
   box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.24);
+  align-self: center;
+  max-width: min(360px, 90%);
 }
 
 .boardSubmittedIcon {
@@ -533,6 +787,7 @@
   font-weight: 600;
   color: #166534;
 }
+
 
 .boardSubmittedSubtitle {
   font-size: 13px;
@@ -597,6 +852,35 @@
   color: #64748b;
   line-height: 1.6;
   max-width: 320px;
+}
+
+.ultimateResultBadge {
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 24px 46px rgba(239, 68, 68, 0.25);
+}
+
+.ultimateResultBadgeError {
+  background: linear-gradient(180deg, #f87171 0%, #ef4444 100%);
+}
+
+.ultimateResultIcon {
+  width: 68px;
+  height: 68px;
+  color: #ffffff;
+}
+
+.ultimateTitleError {
+  color: #b91c1c;
+}
+
+.ultimateHintEmphasis {
+  color: #0f172a;
+  font-weight: 500;
 }
 
 .ultimateBuzzer {

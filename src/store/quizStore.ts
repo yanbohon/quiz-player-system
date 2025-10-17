@@ -89,6 +89,8 @@ interface QuizState {
   selectedEvent?: FusionEventSummary;
   currentStage?: StageConfig;
   teamProfile?: TeamProfile;
+  teamProfiles: Record<string, TeamProfile>;
+  teamDirectorySheetId?: string;
   scoreRecord?: ScoreRecord;
 
   // Health & timers
@@ -140,6 +142,7 @@ interface QuizState {
   selectEventByOrdinal: (ordinal: number, userId?: string) => Promise<StageConfig[]>;
   activateStageById: (stageId: string, userId: string) => Promise<void>;
   refreshTeamProfile: (generalSheetId: string, userId: string) => Promise<TeamProfile | undefined>;
+  ensureTeamProfile: (identifier: string) => Promise<TeamProfile | undefined>;
   refreshScoreRecord: (scoreSheetId: string, userId: string) => Promise<ScoreRecord | undefined>;
   submitAnswerChoice: (params: {
     datasheetId: string;
@@ -180,27 +183,72 @@ function toStageConfig(record: DatasheetRecord, order: number): StageConfig | nu
   };
 }
 
+const IDENTIFIER_FIELD_KEYS = [
+  "用户ID",
+  "用户 ID",
+  "参赛账号",
+  "账号",
+  "台号",
+  "台号ID",
+  "stationId",
+  "station",
+  "ID",
+  "id",
+  "编号",
+  "school",
+  "学校",
+  "city-id",
+  "cityId",
+  "选手ID",
+  "选手编号",
+];
+
+function collectIdentifiers(fields: Record<string, unknown>): Set<string> {
+  const identifiers = new Set<string>();
+  for (const key of IDENTIFIER_FIELD_KEYS) {
+    const value = fields[key];
+    if (value === undefined || value === null) continue;
+    const normalized = String(value).trim();
+    if (normalized) {
+      identifiers.add(normalized);
+    }
+  }
+  return identifiers;
+}
+
+function buildTeamDirectory(records: DatasheetRecord[]): Record<string, TeamProfile> {
+  const directory: Record<string, TeamProfile> = {};
+  for (const record of records) {
+    const fields = record.fields;
+    if (!fields) continue;
+    const identifiers = collectIdentifiers(fields);
+    if (identifiers.size === 0) continue;
+    const [primaryIdentifier] = Array.from(identifiers);
+    const profile: TeamProfile = {
+      recordId: String(record.recordId ?? ""),
+      identifier: primaryIdentifier ?? String(record.recordId ?? ""),
+      displayName: extractDisplayName(fields),
+      fields: { ...fields },
+    };
+    for (const identifier of identifiers) {
+      const normalized = identifier.trim();
+      if (normalized) {
+        directory[normalized] = profile;
+      }
+    }
+  }
+  return directory;
+}
+
 function findRecordByIdentifier(
   records: DatasheetRecord[],
   identifier: string
 ): DatasheetRecord | undefined {
   const target = identifier.trim();
-  const keysToCheck = [
-    "ID",
-    "id",
-    "编号",
-    "school",
-    "学校",
-    "city-id",
-    "cityId",
-    "选手ID",
-    "选手编号",
-  ];
-
   for (const record of records) {
     const fields = record.fields;
     if (!fields) continue;
-    for (const key of keysToCheck) {
+    for (const key of IDENTIFIER_FIELD_KEYS) {
       const value = fields[key];
       if (value !== undefined && String(value).trim() === target) {
         return record;
@@ -220,17 +268,44 @@ function findRecordByIdentifier(
 }
 
 function extractDisplayName(fields: Record<string, unknown>): string | undefined {
-  const candidates = ["名称", "name", "队伍名称", "school", "学校", "city"];
+  const candidates = [
+    "参赛队伍",
+    "队伍名称",
+    "名称",
+    "name",
+    "学校名",
+    "schoolName",
+    "school",
+    "学校",
+    "city",
+  ];
   for (const key of candidates) {
     const value = fields[key];
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
+    if (Array.isArray(value)) {
+      const first = value.find((item) => typeof item === "string" && item.trim());
+      if (typeof first === "string") {
+        return first.trim();
+      }
+    }
   }
   const firstString = Object.values(fields).find(
-    (value) => typeof value === "string" && value.trim()
+    (value) =>
+      (typeof value === "string" && value.trim()) ||
+      (Array.isArray(value) && value.some((item) => typeof item === "string" && item.trim()))
   );
-  return typeof firstString === "string" ? firstString.trim() : undefined;
+  if (typeof firstString === "string") {
+    return firstString.trim();
+  }
+  if (Array.isArray(firstString)) {
+    const first = firstString.find((item) => typeof item === "string" && item.trim());
+    if (typeof first === "string") {
+      return first.trim();
+    }
+  }
+  return undefined;
 }
 
 export const useQuizStore = create<QuizState>()(
@@ -243,6 +318,8 @@ export const useQuizStore = create<QuizState>()(
     selectedEvent: undefined,
     currentStage: undefined,
     teamProfile: undefined,
+    teamProfiles: {},
+    teamDirectorySheetId: undefined,
     scoreRecord: undefined,
     hp: INITIAL_HP,
     maxHp: INITIAL_HP,
@@ -382,6 +459,8 @@ export const useQuizStore = create<QuizState>()(
         state.selectedEvent = undefined;
         state.currentStage = undefined;
         state.teamProfile = undefined;
+        state.teamProfiles = {};
+        state.teamDirectorySheetId = undefined;
         state.scoreRecord = undefined;
         state.commandLog = [];
         state.waitingForStageStart = false;
@@ -476,10 +555,12 @@ export const useQuizStore = create<QuizState>()(
         set((draft) => {
           draft.selectedEvent = event;
           draft.stages = stages;
-          draft.currentStage = undefined;
-          draft.teamProfile = undefined;
-          draft.scoreRecord = undefined;
-          draft.waitingForStageStart = false;
+        draft.currentStage = undefined;
+        draft.teamProfile = undefined;
+        draft.teamProfiles = {};
+        draft.teamDirectorySheetId = undefined;
+        draft.scoreRecord = undefined;
+        draft.waitingForStageStart = false;
           draft.isLoading = false;
         });
 
@@ -518,6 +599,10 @@ export const useQuizStore = create<QuizState>()(
         draft.questions = [];
         draft.answers = {};
         draft.progress = { total: 0, answered: 0 };
+        draft.teamProfiles = {};
+        if (stage.generalSheetId) {
+          draft.teamDirectorySheetId = stage.generalSheetId;
+        }
       });
 
       try {
@@ -555,18 +640,59 @@ export const useQuizStore = create<QuizState>()(
 
     refreshTeamProfile: async (generalSheetId, userId) => {
       const records = await fetchDatasheetRecords(generalSheetId);
-      const match = findRecordByIdentifier(records, userId);
-      if (!match || !match.fields) return undefined;
-      const profile: TeamProfile = {
-        recordId: String(match.recordId ?? ""),
-        identifier: userId,
-        displayName: extractDisplayName(match.fields),
-        fields: { ...match.fields },
-      };
+      const directory = buildTeamDirectory(records);
+      let matchedProfile: TeamProfile | undefined;
+
+      if (userId) {
+        matchedProfile = directory[userId];
+        if (!matchedProfile) {
+          matchedProfile = Object.values(directory).find((profile) => {
+            const identifiers = collectIdentifiers(profile.fields);
+            return identifiers.has(userId);
+          });
+        }
+      }
+
       set((state) => {
-        state.teamProfile = profile;
+        state.teamProfiles = directory;
+        state.teamDirectorySheetId = generalSheetId;
+        if (matchedProfile) {
+          state.teamProfile = matchedProfile;
+        }
       });
-      return profile;
+
+      return matchedProfile;
+    },
+
+    ensureTeamProfile: async (identifier) => {
+      const target = identifier.trim();
+      if (!target) return undefined;
+      const state = get();
+      if (state.teamProfiles[target]) {
+        return state.teamProfiles[target];
+      }
+
+      const sheetId =
+        state.currentStage?.generalSheetId ??
+        state.teamDirectorySheetId ??
+        state.stages.find((stage) => stage.generalSheetId)?.generalSheetId;
+
+      if (!sheetId) {
+        return undefined;
+      }
+
+      const records = await fetchDatasheetRecords(sheetId);
+      const directory = buildTeamDirectory(records);
+      const matched = directory[target];
+
+      set((draft) => {
+        draft.teamDirectorySheetId = sheetId;
+        for (const [key, value] of Object.entries(directory)) {
+          draft.teamProfiles[key] = value;
+        }
+      });
+
+      return matched;
     },
 
     refreshScoreRecord: async (scoreSheetId, userId) => {
