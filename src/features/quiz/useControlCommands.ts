@@ -99,7 +99,7 @@ function resolveModeFromRaw(rawFields: StageRawFields | undefined): ContestModeI
   return undefined;
 }
 
-function resolveModeForStage(stage: QuizStage): ContestModeId | undefined {
+export function resolveModeForStage(stage: QuizStage): ContestModeId | undefined {
   if (!stage) return undefined;
 
   const rawMode = resolveModeFromRaw(stage.rawFields);
@@ -371,7 +371,6 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       if (stageId && userId) {
         try {
           await activateStageById(stageId, userId);
-          Toast.success(`环节 ${stageId} 已启动`);
           const stage = useQuizStore.getState().currentStage;
           const targetMode = resolveModeForStage(stage);
           const targetPath = targetMode ? `/quiz?mode=${encodeURIComponent(targetMode)}` : "/quiz";
@@ -415,7 +414,6 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       const questionOrdinal = parseQuestionSelectCommand(command);
       if (questionOrdinal !== null) {
         setCurrentQuestionIndex(questionOrdinal);
-        Toast.success(`已切换到题目 ${questionOrdinal + 1}`);
         return;
       }
     },

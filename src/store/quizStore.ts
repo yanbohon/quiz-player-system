@@ -15,6 +15,9 @@ import { NormalizedQuestion } from "@/lib/normalizeQuestion";
 
 const INITIAL_HP = 3;
 const COMMAND_LOG_LIMIT = 30;
+export const DEFAULT_OCEAN_REMAINING_COUNT = 600;
+
+type QuestionLoadStatus = "idle" | "loading" | "success" | "error";
 
 type StageKind =
   | "meta"
@@ -82,6 +85,11 @@ interface QuizState {
   questions: NormalizedQuestion[];
   currentIndex: number;
   answers: Record<string, string[]>;
+  oceanRemainingCount: number;
+  questionLoadStatus: QuestionLoadStatus;
+  questionLoadAttempts: number;
+  questionLoadError?: string;
+  questionGateOpened: boolean;
 
   // Contest meta
   events: FusionEventSummary[];
@@ -158,6 +166,14 @@ interface QuizState {
     answer: string;
     time?: number;
     light?: "0" | "1";
+    statusFieldKey?: string;
+    status?: string;
+  }) => Promise<void>;
+  updateScoreStatus: (params: {
+    datasheetId: string;
+    recordId: string;
+    fieldKey: string;
+    status: string;
   }) => Promise<void>;
   grabNextQuestion: (userId: string) => Promise<NormalizedQuestion | undefined>;
 }
@@ -313,6 +329,11 @@ export const useQuizStore = create<QuizState>()(
     questions: [],
     currentIndex: 0,
     answers: {},
+    oceanRemainingCount: DEFAULT_OCEAN_REMAINING_COUNT,
+    questionLoadStatus: "idle",
+    questionLoadAttempts: 0,
+    questionLoadError: undefined,
+    questionGateOpened: true,
     events: [],
     stages: [],
     selectedEvent: undefined,
@@ -384,6 +405,7 @@ export const useQuizStore = create<QuizState>()(
         }
 
         state.waitingForStageStart = false;
+        state.questionGateOpened = true;
       }),
 
     removeQuestion: (questionId) =>
@@ -422,6 +444,7 @@ export const useQuizStore = create<QuizState>()(
         );
         state.currentIndex = clamped;
         state.waitingForStageStart = false;
+        state.questionGateOpened = true;
       }),
 
     setAnswer: (questionId, answer) =>
@@ -464,6 +487,11 @@ export const useQuizStore = create<QuizState>()(
         state.scoreRecord = undefined;
         state.commandLog = [];
         state.waitingForStageStart = false;
+        state.oceanRemainingCount = DEFAULT_OCEAN_REMAINING_COUNT;
+        state.questionLoadStatus = "idle";
+        state.questionLoadAttempts = 0;
+        state.questionLoadError = undefined;
+        state.questionGateOpened = true;
       }),
 
     adjustHp: (delta) =>
@@ -591,11 +619,13 @@ export const useQuizStore = create<QuizState>()(
         throw new Error(`未找到环节 ${stageId}`);
       }
 
+      const isStandardStage = stage.kind === "standard";
+
       set((draft) => {
         draft.isLoading = true;
         draft.error = undefined;
         draft.currentStage = stage;
-        draft.waitingForStageStart = stage.kind === "grab";
+        draft.waitingForStageStart = stage.kind === "grab" || isStandardStage;
         draft.questions = [];
         draft.answers = {};
         draft.progress = { total: 0, answered: 0 };
@@ -603,23 +633,81 @@ export const useQuizStore = create<QuizState>()(
         if (stage.generalSheetId) {
           draft.teamDirectorySheetId = stage.generalSheetId;
         }
+        if (stage.kind === "grab") {
+          draft.oceanRemainingCount = DEFAULT_OCEAN_REMAINING_COUNT;
+        }
+        draft.questionLoadStatus = isStandardStage ? "loading" : "idle";
+        draft.questionLoadAttempts = 0;
+        draft.questionLoadError = undefined;
+        draft.questionGateOpened = !isStandardStage;
       });
 
-      try {
-        if (stage.kind === "standard" && stage.questionSheetId) {
-          const questions = await fetchNormalizedDatasheetQuestions(stage.questionSheetId);
-          get().setQuestions(questions);
-        }
+      const sleep = (ms: number) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        });
 
-        if (stage.kind === "grab") {
-          set((draft) => {
-            draft.isLoading = false;
-          });
+      try {
+        if (isStandardStage) {
+          if (!stage.questionSheetId) {
+            set((draft) => {
+              draft.questionLoadStatus = "error";
+              draft.questionLoadAttempts = 0;
+              draft.questionLoadError = "缺少题库配置，无法加载题目";
+              draft.waitingForStageStart = true;
+            });
+          } else {
+            const maxAttempts = 3;
+            const baseDelayMs = 1000;
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              set((draft) => {
+                draft.questionLoadStatus = "loading";
+                draft.questionLoadAttempts = attempt;
+                draft.questionLoadError = undefined;
+              });
+
+              try {
+                const questions = await fetchNormalizedDatasheetQuestions(stage.questionSheetId!);
+                get().setQuestions(questions);
+                set((draft) => {
+                  draft.questionLoadStatus = "success";
+                  draft.questionLoadError = undefined;
+                  draft.waitingForStageStart = true;
+                });
+                break;
+              } catch (error) {
+                const message =
+                  error instanceof Error ? error.message : "题目加载失败";
+                set((draft) => {
+                  draft.questionLoadError = message;
+                });
+
+                if (attempt >= maxAttempts) {
+                  set((draft) => {
+                    draft.questionLoadStatus = "error";
+                    draft.questionLoadError = message;
+                    draft.waitingForStageStart = true;
+                  });
+                  throw error;
+                }
+
+                const delay = baseDelayMs * 2 ** (attempt - 1);
+                await sleep(delay);
+              }
+            }
+          }
         } else {
           set((draft) => {
-            draft.isLoading = false;
+            draft.questionLoadStatus = "idle";
+            draft.questionLoadAttempts = 0;
+            draft.questionLoadError = undefined;
           });
         }
+
+        set((draft) => {
+          draft.isLoading = false;
+        });
 
         if (stage.generalSheetId) {
           await get().refreshTeamProfile(stage.generalSheetId, userId);
@@ -737,6 +825,8 @@ export const useQuizStore = create<QuizState>()(
       answer,
       time,
       light,
+      statusFieldKey,
+      status,
     }) => {
       const fields: Record<string, unknown> = {
         [questionId]: answer,
@@ -746,6 +836,13 @@ export const useQuizStore = create<QuizState>()(
       }
       if (light === "0" || light === "1") {
         fields.light = light;
+      }
+      if (
+        statusFieldKey &&
+        (typeof status === "string" || typeof status === "number")
+      ) {
+        fields[statusFieldKey] =
+          typeof status === "number" ? String(status) : status;
       }
       const payload = {
         records: [
@@ -758,12 +855,44 @@ export const useQuizStore = create<QuizState>()(
       await patchDatasheetRecords(datasheetId, payload);
     },
 
+    updateScoreStatus: async ({ datasheetId, recordId, fieldKey, status }) => {
+      const normalizedStatus = String(status);
+      const payload = {
+        records: [
+          {
+            recordId,
+            fields: {
+              [fieldKey]: normalizedStatus,
+            },
+          },
+        ],
+      };
+      await patchDatasheetRecords(datasheetId, payload);
+      set((draft) => {
+        if (
+          draft.scoreRecord?.recordId === recordId &&
+          draft.scoreRecord.fields
+        ) {
+          draft.scoreRecord.fields[fieldKey] = normalizedStatus;
+        }
+      });
+    },
+
     grabNextQuestion: async (userId) => {
-      const question = await fetchGrabbedQuestion(userId);
-      if (question) {
-        get().pushQuestion(question);
+      const result = await fetchGrabbedQuestion(userId);
+      if (typeof result.remainingCount === "number") {
+        const remaining = result.remainingCount;
+        set((draft) => {
+          draft.oceanRemainingCount = Math.max(
+            0,
+            remaining
+          );
+        });
       }
-      return question;
+      if (result.question) {
+        get().pushQuestion(result.question);
+      }
+      return result.question;
     },
   }))
 );

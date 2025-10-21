@@ -49,12 +49,28 @@ interface GrabQuestionResponse {
   success?: boolean;
   message?: string;
   question?: Record<string, unknown>;
+  remainingCount?: number;
   [key: string]: unknown;
 }
 
 interface SubmitGrabAnswerResponse {
   success?: boolean;
   message?: string;
+  result?: string;
+  correctAnswer?: string | string[];
+  score?: {
+    total?: number;
+    increment?: number;
+    [key: string]: unknown;
+  };
+  stats?: {
+    total?: number;
+    correct?: number;
+    wrong?: number;
+    accuracy?: number;
+    lastAnswerTime?: number;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -135,7 +151,7 @@ export async function fetchNormalizedDatasheetQuestions(
 
 export async function fetchGrabbedQuestion(
   userId: string
-): Promise<NormalizedQuestion | undefined> {
+): Promise<{ question?: NormalizedQuestion; remainingCount?: number }> {
   const response = await fetch(
     resolveTihaiUrl("/grab-with-details"),
     {
@@ -171,14 +187,17 @@ export async function fetchGrabbedQuestion(
   }
 
   const normalized = normalizeQuestion(data, "tihai");
-  return normalized[0];
+  const question = normalized[0];
+  const remainingCount =
+    typeof data?.remainingCount === "number" ? data.remainingCount : undefined;
+  return { question, remainingCount };
 }
 
 export async function submitGrabbedAnswer(params: {
   userId: string;
   questionId: string;
   answer: string | string[];
-}): Promise<void> {
+}): Promise<SubmitGrabAnswerResponse> {
   const payload = {
     userId: params.userId,
     questionId: params.questionId,
@@ -215,6 +234,8 @@ export async function submitGrabbedAnswer(params: {
         : "题海答题提交失败";
     throw new ApiError(response.status, message, data);
   }
+
+  return data ?? { success: true };
 }
 
 interface AttachmentUploadData {

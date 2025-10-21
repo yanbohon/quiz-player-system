@@ -10,43 +10,60 @@ export function useMqtt(config?: MqttConfig) {
   const [isConnecting, setIsConnecting] = useState(false);
 
   useEffect(() => {
-    if (!config) return;
+    if (!config) {
+      setIsConnected(false);
+      setIsConnecting(false);
+      return;
+    }
 
     let mounted = true;
+    setIsConnecting(true);
+    setError(null);
+    setIsConnected(false);
+
+    const unsubscribeStatus = mqttService.onConnectionStatusChange((status) => {
+      if (!mounted) return;
+      switch (status) {
+        case "connected":
+          setIsConnected(true);
+          setIsConnecting(false);
+          setError(null);
+          break;
+        case "connecting":
+        case "reconnecting":
+          setIsConnected(false);
+          setIsConnecting(true);
+          break;
+        case "disconnected":
+          setIsConnected(false);
+          setIsConnecting(false);
+          break;
+        default:
+          break;
+      }
+    });
 
     const connect = async () => {
       if (!mounted) return;
-      
-      setIsConnecting(true);
-      setError(null);
 
       try {
         await mqttService.connect(config);
-        if (mounted) {
-          setIsConnected(true);
-          setError(null);
-          setIsConnecting(false);
-          console.log("MQTT connection established in useMqtt hook");
-        }
       } catch (err) {
-        if (mounted) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          setError(error);
-          setIsConnected(false);
-          setIsConnecting(false);
-          
-          // Log error but don't throw - allow app to continue without MQTT
-          console.warn("MQTT connection failed, app will continue without real-time updates:", error.message);
-        }
+        if (!mounted) return;
+        const error = err instanceof Error ? err : new Error(String(err));
+        setError(error);
+        setIsConnected(false);
+        setIsConnecting(false);
+        console.warn("MQTT connection failed, app will continue without real-time updates:", error.message);
       }
     };
 
-    connect();
+    void connect();
 
     return () => {
       mounted = false;
-      // Only disconnect if we successfully connected
-      if (isConnected) {
+      unsubscribeStatus();
+      if (mqttService.isConnected()) {
         mqttService.disconnect();
       }
     };

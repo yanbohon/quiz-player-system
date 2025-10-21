@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Toast } from "@/lib/arco";
 import { API_ENDPOINTS } from "@/constants";
 import { useAppStore } from "@/store/useAppStore";
-import { useQuizStore } from "@/store/quizStore";
+import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
 import { ApiError } from "@/lib/api/client";
 import { submitGrabbedAnswer } from "@/lib/fusionClient";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
@@ -17,6 +17,7 @@ import {
   CustomOceanQuestion,
   MatchingOption,
   QuizQuestion,
+  QuizSubmissionResult,
   QuizRuntime,
   QuizRuntimeState,
   StandardQuestion,
@@ -447,6 +448,8 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     loadQuestions,
     grabNextQuestion,
     setCurrentQuestionIndex,
+    oceanRemainingCount,
+    questionGateOpened,
   } = useQuizStore(
     useShallow((state) => ({
       questions: state.questions,
@@ -456,6 +459,8 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       loadQuestions: state.loadQuestions,
       grabNextQuestion: state.grabNextQuestion,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
+      oceanRemainingCount: state.oceanRemainingCount,
+      questionGateOpened: state.questionGateOpened,
     }))
   );
 
@@ -601,33 +606,65 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   }, []);
 
   const assignQuestion = useCallback(
-    (nextQuestion: QuizQuestion | undefined, index: number, total: number) => {
+    (
+      nextQuestion: QuizQuestion | undefined,
+      index: number,
+      total: number,
+      options?: { hold?: boolean }
+    ) => {
+      const shouldHold =
+        options?.hold ??
+        (meta.questionFlow === "push" && !questionGateOpened);
       const isUltimate = meta.id === "ultimate-challenge";
+      const hasHp = meta.features.hasHp;
+      const remainingHp = hasHp
+        ? state.hp ?? meta.features.initialHp ?? 0
+        : undefined;
+      const isEliminated = hasHp ? (remainingHp ?? 0) <= 0 : false;
+      const gatedQuestion = shouldHold ? undefined : nextQuestion;
+      const effectiveQuestion = isEliminated ? undefined : gatedQuestion;
+      const effectiveIndex = shouldHold ? -1 : index;
+
+      questionIndexRef.current = effectiveIndex;
+
       setState((prev) => ({
         ...prev,
         mode: meta.id,
-        question: nextQuestion,
-        questionIndex: index,
+        question: effectiveQuestion,
+        questionIndex: effectiveIndex,
         totalQuestions: total,
-        answeringEnabled: isUltimate ? false : !!nextQuestion,
+        answeringEnabled: isUltimate ? false : !!effectiveQuestion,
         awaitingHost:
-          meta.questionFlow !== "local" ? !nextQuestion : false,
+          meta.questionFlow !== "local"
+            ? shouldHold || !effectiveQuestion
+            : false,
         delegationTargetId: null,
         phase: isUltimate
-          ? nextQuestion
+          ? effectiveQuestion
             ? "buzz"
             : "waiting"
           : prev.phase,
       }));
-      if (nextQuestion) {
-        if (isUltimate) {
-          perQuestionStartRef.current = null;
-        } else {
-          markQuestionTime();
-        }
+
+      if (!effectiveQuestion) {
+        return;
+      }
+
+      if (isUltimate) {
+        perQuestionStartRef.current = null;
+      } else {
+        markQuestionTime();
       }
     },
-    [markQuestionTime, meta.id, meta.questionFlow]
+    [
+      markQuestionTime,
+      meta.features.hasHp,
+      meta.features.initialHp,
+      meta.id,
+      meta.questionFlow,
+      questionGateOpened,
+      state.hp,
+    ]
   );
 
   const resetRuntime = useCallback(() => {
@@ -657,24 +694,40 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   }, [clearAnswers, resetRuntime, setAppCurrentQuestion, meta.id]);
 
   useEffect(() => {
-    const total = quizQuestions.length;
+    const fetchedCount = quizQuestions.length;
+    const sanitizedRemaining =
+      meta.id === "ocean-adventure"
+        ? Number.isFinite(oceanRemainingCount)
+          ? Math.max(0, Math.floor(oceanRemainingCount))
+          : DEFAULT_OCEAN_REMAINING_COUNT
+        : 0;
+
+    const total =
+      meta.id === "ocean-adventure"
+        ? Math.max(fetchedCount + sanitizedRemaining, fetchedCount)
+        : quizQuestions.length;
+
     const index =
-      total === 0
+      fetchedCount === 0
         ? meta.questionFlow === "push"
           ? -1
-          : 0
-        : Math.min(Math.max(storeCurrentIndex, 0), total - 1);
+          : -1
+        : Math.min(Math.max(storeCurrentIndex, 0), Math.max(0, fetchedCount - 1));
+
+    const holdQuestion = meta.questionFlow === "push" && !questionGateOpened;
 
     const nextQuestion =
-      index >= 0 && index < total ? quizQuestions[index] : undefined;
+      index >= 0 && index < quizQuestions.length ? quizQuestions[index] : undefined;
+
+    const effectiveIndex = holdQuestion ? -1 : index;
 
     questionListRef.current = quizQuestions;
-    questionIndexRef.current = index;
+    questionIndexRef.current = effectiveIndex;
     currentQuestionRef.current = nextQuestion;
 
-    assignQuestion(nextQuestion, index, total);
+    assignQuestion(nextQuestion, index, total, { hold: holdQuestion });
 
-    if (nextQuestion) {
+    if (!holdQuestion && nextQuestion) {
       if ("id" in nextQuestion) {
         setAppCurrentQuestion(nextQuestion.id);
       } else {
@@ -685,10 +738,13 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
   }, [
     assignQuestion,
+    meta.id,
     meta.questionFlow,
+    questionGateOpened,
     quizQuestions,
     setAppCurrentQuestion,
     storeCurrentIndex,
+    oceanRemainingCount,
   ]);
 
   useEffect(() => {
@@ -825,11 +881,13 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   }, []);
 
   const submitAnswer = useCallback(
-    async (value: string | string[]): Promise<boolean | undefined> => {
+    async (value: string | string[]): Promise<QuizSubmissionResult | undefined> => {
       const currentQuestion = currentQuestionRef.current;
       const currentIndex = questionIndexRef.current;
 
       if (!currentQuestion || currentIndex < 0) return undefined;
+
+      let oceanSubmission: Awaited<ReturnType<typeof submitGrabbedAnswer>> | undefined;
 
       if (meta.id === "ocean-adventure" && isOceanQuestion(currentQuestion)) {
         if (!userId) {
@@ -839,7 +897,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
           Array.isArray(value) && value.length === 1
             ? value[0] ?? ""
             : value;
-        await submitGrabbedAnswer({
+        oceanSubmission = await submitGrabbedAnswer({
           userId,
           questionId: currentQuestion.questionKey,
           answer: answerPayload,
@@ -848,13 +906,27 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
 
       const durationMs = resolveDuration();
       let isCorrect: boolean | undefined;
-      let hpAfterAnswer = state.hp ?? meta.features.initialHp;
+      let hpAfterAnswer = meta.features.hasHp
+        ? state.hp ?? meta.features.initialHp ?? 0
+        : undefined;
 
-      if (isStandardQuestion(currentQuestion)) {
+      if (meta.id === "ocean-adventure" && oceanSubmission) {
+        const rawResult =
+          typeof oceanSubmission.result === "string"
+            ? oceanSubmission.result.toLowerCase()
+            : undefined;
+        if (rawResult === "correct") {
+          isCorrect = true;
+        } else if (rawResult === "wrong") {
+          isCorrect = false;
+        }
+      } else if (isStandardQuestion(currentQuestion)) {
         isCorrect = evaluateStandardQuestion(value);
       } else if (isOceanQuestion(currentQuestion)) {
         isCorrect = evaluateOceanQuestion(value);
       }
+
+      const hpBeforeAnswer = hpAfterAnswer;
 
       const answerId = isStandardQuestion(currentQuestion)
         ? currentQuestion.id
@@ -872,7 +944,8 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
 
       if (meta.features.hasHp && isCorrect === false) {
         wrongCountRef.current += 1;
-        const currentHp = state.hp ?? meta.features.initialHp ?? 0;
+        const currentHp =
+          hpBeforeAnswer ?? state.hp ?? meta.features.initialHp ?? 0;
         const nextHp = Math.max(
           currentHp - (meta.features.hpLossPerWrong ?? 1),
           0
@@ -888,13 +961,28 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         }
       }
 
+      const submissionOutcome: QuizSubmissionResult = {
+        correct: isCorrect,
+        rawResult:
+          typeof oceanSubmission?.result === "string"
+            ? oceanSubmission.result
+            : undefined,
+        hpAfterAnswer:
+          meta.features.hasHp && typeof hpAfterAnswer === "number"
+            ? hpAfterAnswer
+            : undefined,
+        correctAnswer: oceanSubmission?.correctAnswer,
+        score: oceanSubmission?.score,
+        stats: oceanSubmission?.stats,
+      };
+
       if (meta.id === "qa" || meta.id === "last-stand") {
         setState((prev) => ({
           ...prev,
           awaitingHost: true,
           answeringEnabled: false,
         }));
-        return isCorrect;
+        return submissionOutcome;
       }
 
       if (meta.id === "ultimate-challenge") {
@@ -905,31 +993,34 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
           answeringEnabled: false,
           phase: "waiting",
         }));
-        return isCorrect;
+        return submissionOutcome;
       }
 
       if (meta.id === "speed-run") {
         const nextIndex = currentIndex + 1;
         if (nextIndex >= questionListRef.current.length) {
           stopAll();
-          return isCorrect;
+          return submissionOutcome;
         }
         setCurrentQuestionIndex(nextIndex);
-        return isCorrect;
+        return submissionOutcome;
       }
 
       if (meta.id === "ocean-adventure") {
-        if (meta.features.hasHp && (hpAfterAnswer ?? 0) <= 0) {
-          stopAll();
-        }
+        const exhaustedHp =
+          meta.features.hasHp && (hpAfterAnswer ?? 0) <= 0;
         setState((prev) => ({
           ...prev,
           awaitingHost: true,
+          question: exhaustedHp ? undefined : prev.question,
         }));
-        return isCorrect;
+        if (exhaustedHp) {
+          stopAll();
+        }
+        return submissionOutcome;
       }
 
-      return isCorrect;
+      return submissionOutcome;
     },
     [
       evaluateOceanQuestion,
@@ -948,6 +1039,14 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   );
 
   const requestNextQuestion = useCallback(async () => {
+    if (meta.features.hasHp) {
+      const remainingHp =
+        state.hp ?? meta.features.initialHp ?? 0;
+      if (remainingHp <= 0) {
+        return;
+      }
+    }
+
     if (meta.questionFlow === "local") {
       const nextIndex = questionIndexRef.current + 1;
       if (nextIndex < questionListRef.current.length) {
@@ -959,7 +1058,15 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     if (meta.id === "ocean-adventure") {
       await fetchNextGrabQuestion();
     }
-  }, [fetchNextGrabQuestion, meta.id, meta.questionFlow, setCurrentQuestionIndex]);
+  }, [
+    fetchNextGrabQuestion,
+    meta.features.hasHp,
+    meta.features.initialHp,
+    meta.id,
+    meta.questionFlow,
+    setCurrentQuestionIndex,
+    state.hp,
+  ]);
 
   const applyHostJudgement = useCallback(
     (result: "correct" | "wrong") => {
@@ -1014,6 +1121,20 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     setState((prev) => ({
       ...prev,
       awaitingHost: false,
+    }));
+  }, [meta.id]);
+
+  const resetUltimateRound = useCallback(() => {
+    if (meta.id !== "ultimate-challenge") {
+      return;
+    }
+    perQuestionStartRef.current = null;
+    setState((prev) => ({
+      ...prev,
+      awaitingHost: true,
+      answeringEnabled: false,
+      delegationTargetId: null,
+      phase: prev.question ? "buzz" : "waiting",
     }));
   }, [meta.id]);
 
@@ -1076,6 +1197,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       applyHostJudgement: meta.features.hasHp ? applyHostJudgement : undefined,
       delegateAnswerTo: meta.features.allowsDelegation ? delegateAnswerTo : undefined,
       triggerBuzzer: meta.features.requiresBuzzer ? triggerBuzzer : undefined,
+      resetUltimateRound: meta.id === "ultimate-challenge" ? resetUltimateRound : undefined,
     },
     meta,
   };

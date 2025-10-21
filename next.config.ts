@@ -1,7 +1,37 @@
+import os from "os";
 import type { NextConfig } from "next";
+
+function resolveAllowedDevOrigins(): string[] {
+  const port = Number(process.env.PORT ?? process.env.NEXT_DEV_PORT ?? 3000);
+  const origins = new Set<string>([
+    `http://localhost:${port}`,
+    `http://127.0.0.1:${port}`,
+  ]);
+
+  const interfaces = os.networkInterfaces();
+  for (const addresses of Object.values(interfaces)) {
+    for (const address of addresses ?? []) {
+      if (!address || address.internal || address.family !== "IPv4") continue;
+      origins.add(`http://${address.address}:${port}`);
+    }
+  }
+
+  const extraOrigins = process.env.NEXT_DEV_ALLOWED_ORIGINS;
+  if (extraOrigins) {
+    for (const origin of extraOrigins
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)) {
+      origins.add(origin);
+    }
+  }
+
+  return Array.from(origins);
+}
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: resolveAllowedDevOrigins(),
 
   // 优化配置
   compress: true,
@@ -24,4 +54,3 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
-

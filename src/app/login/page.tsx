@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, NavBar, NoticeBar } from "@arco-design/mobile-react";
+import IconNotice from '@arco-design/mobile-react/esm/icon/IconNotice';
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -41,7 +42,7 @@ export default function LoginPage() {
       id: identifier,
       name: `${station}号台`,
     });
-    Toast.success(`${station}号台登录成功`);
+    Toast.success(`${station}号台登录成功`,500);
     router.replace("/waiting");
   };
 
@@ -51,7 +52,7 @@ export default function LoginPage() {
         <NavBar title="选手登录" leftContent={null} />
 
         <div className={styles.body}>
-          <NoticeBar className={styles.notice} marquee="none">
+          <NoticeBar className={styles.notice} marquee="none" leftContent={<IconNotice />}>
             请选择所属队伍的参赛台号，点击按钮即可登录。
           </NoticeBar>
 
@@ -63,11 +64,12 @@ export default function LoginPage() {
                 <Button
                   key={identifier}
                   type="primary"
+                  size="huge"
                   className={`${styles.stationButton} ${isActive ? styles.active : ""}`}
                   onClick={() => handleSelectStation(station)}
                 >
-                  <span className={styles.stationName}>{station}号台</span>
                   <span className={styles.stationId}>ID {identifier}</span>
+                  <span className={styles.stationName}>{station}号台</span>
                 </Button>
               );
             })}

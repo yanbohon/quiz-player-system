@@ -2,6 +2,8 @@
 
 import mqtt, { IClientOptions, IClientPublishOptions, MqttClient } from "mqtt";
 
+type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
+
 export interface MqttConfig {
   url: string;
   username?: string;
@@ -27,15 +29,35 @@ class MqttService {
   private maxReconnectAttempts = 5;
   private isConnecting = false;
   private connectPromise: Promise<void> | null = null;
+  private connectionListeners = new Set<(status: ConnectionStatus) => void>();
+
+  private notifyConnectionStatus(status: ConnectionStatus) {
+    this.connectionListeners.forEach((listener) => {
+      try {
+        listener(status);
+      } catch (err) {
+        console.error("Connection status listener failed", err);
+      }
+    });
+  }
+
+  onConnectionStatusChange(listener: (status: ConnectionStatus) => void): () => void {
+    this.connectionListeners.add(listener);
+    return () => {
+      this.connectionListeners.delete(listener);
+    };
+  }
 
   connect(config: MqttConfig): Promise<void> {
     if (this.client && this.client.connected) {
       console.log("MQTT already connected");
+      this.notifyConnectionStatus("connected");
       return Promise.resolve();
     }
 
     if (this.isConnecting && this.connectPromise) {
       console.warn("MQTT connection already in progress");
+      this.notifyConnectionStatus("connecting");
       return this.connectPromise;
     }
 
@@ -76,6 +98,7 @@ class MqttService {
       try {
         this.isConnecting = true;
         this.reconnectAttempts = 0;
+        this.notifyConnectionStatus("connecting");
 
         const options: IClientOptions = {
           clientId:
@@ -85,7 +108,6 @@ class MqttService {
           reconnectPeriod: config.reconnectPeriod ?? 5000,
           keepalive: config.keepalive ?? 60,
           protocolVersion: 4,
-          // Add these options for better WebSocket compatibility
           resubscribe: true,
           queueQoSZero: false,
         };
@@ -113,16 +135,14 @@ class MqttService {
           throw new Error("Failed to initialize MQTT client");
         }
 
-        // Set up event handlers
         const connectHandler = () => {
           console.log("MQTT connected successfully");
+          this.notifyConnectionStatus("connected");
           resolveConnection();
         };
 
         const errorHandler = (error: Error) => {
           console.error("MQTT connection error:", error);
-          
-          // Only reject on initial connection attempt
           if (this.reconnectAttempts === 0) {
             this.reconnectAttempts++;
             rejectConnection(error);
@@ -132,22 +152,25 @@ class MqttService {
         const offlineHandler = () => {
           console.log("MQTT client offline");
           this.isConnecting = false;
+          this.notifyConnectionStatus("disconnected");
         };
 
         const reconnectHandler = () => {
           this.reconnectAttempts++;
           console.log(`MQTT reconnecting... (attempt ${this.reconnectAttempts})`);
-          
-          // Stop reconnecting after max attempts
+          this.notifyConnectionStatus("reconnecting");
+
           if (this.reconnectAttempts >= this.maxReconnectAttempts && client) {
             console.warn("Max reconnection attempts reached, stopping reconnect");
             client.end(true);
+            this.notifyConnectionStatus("disconnected");
           }
         };
 
         const closeHandler = () => {
           console.log("MQTT connection closed");
           this.isConnecting = false;
+          this.notifyConnectionStatus("disconnected");
           if (!settled) {
             rejectConnection(new Error("MQTT connection closed before establishing"));
           }
@@ -157,6 +180,7 @@ class MqttService {
         client.on("error", errorHandler);
         client.on("offline", offlineHandler);
         client.on("reconnect", reconnectHandler);
+        client.on("close", closeHandler);
 
         client.on("message", (topic, message) => {
           const messageStr = message.toString();
@@ -166,21 +190,18 @@ class MqttService {
           }
         });
 
-        client.on("close", closeHandler);
-
-        // Set a timeout to reject if connection takes too long
         connectionTimeout = setTimeout(() => {
           if (this.isConnecting) {
             this.isConnecting = false;
             const timeoutError = new Error("MQTT connection timeout");
             console.error(timeoutError);
+            this.notifyConnectionStatus("disconnected");
             if (!settled) {
               rejectConnection(timeoutError);
             }
           }
         }, 35000);
 
-        // Clear timeout on successful connect
         client.once("connect", () => {
           clearPendingTimeout();
         });
@@ -188,6 +209,7 @@ class MqttService {
         const err = error instanceof Error ? error : new Error(String(error));
         this.isConnecting = false;
         this.connectPromise = null;
+        this.notifyConnectionStatus("disconnected");
         reject(err);
       }
     });
@@ -200,13 +222,22 @@ class MqttService {
     callback: (message: string) => void,
     options?: SubscribeOptions
   ): () => void {
-    if (!this.client) {
-      throw new Error("MQTT client not connected");
+    const client = this.client;
+
+    if (
+      !client ||
+      (client as MqttClient & { disconnecting?: boolean }).disconnecting ||
+      !client.connected
+    ) {
+      console.warn(`Cannot subscribe to ${topic}: MQTT client not connected`);
+      const error = new Error("MQTT client not connected");
+      options?.onError?.(error);
+      return () => {};
     }
 
     if (!this.subscribers.has(topic)) {
       this.subscribers.set(topic, new Set());
-      this.client.subscribe(
+      client.subscribe(
         topic,
         { qos: options?.qos ?? 0 },
         (err: Error | null) => {
@@ -219,7 +250,6 @@ class MqttService {
         }
       );
     } else if (options?.onSuccess) {
-      // Already subscribed; invoke success immediately so callers can proceed
       queueMicrotask(() => options.onSuccess?.());
     }
 
@@ -267,6 +297,7 @@ class MqttService {
       this.isConnecting = false;
       this.reconnectAttempts = 0;
       this.subscribers.clear();
+      this.notifyConnectionStatus("disconnected");
     }
   }
 

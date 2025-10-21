@@ -103,8 +103,30 @@ export interface QuizRuntimeState {
   phase?: UltimatePhase;
 }
 
+export interface QuizSubmissionStats {
+  total?: number;
+  correct?: number;
+  wrong?: number;
+  accuracy?: number;
+  lastAnswerTime?: number;
+}
+
+export interface QuizSubmissionScore {
+  total?: number;
+  increment?: number;
+}
+
+export interface QuizSubmissionResult {
+  correct?: boolean;
+  rawResult?: string;
+  hpAfterAnswer?: number;
+  correctAnswer?: string | string[];
+  score?: QuizSubmissionScore;
+  stats?: QuizSubmissionStats;
+}
+
 export interface QuizRuntimeControls {
-  submitAnswer: (value: string | string[]) => Promise<boolean | undefined>;
+  submitAnswer: (value: string | string[]) => Promise<QuizSubmissionResult | undefined>;
   requestNextQuestion: () => Promise<void>;
   reset: () => Promise<void>;
   startLocalTimer: () => void;
@@ -112,6 +134,7 @@ export interface QuizRuntimeControls {
   applyHostJudgement?: (result: "correct" | "wrong") => void;
   delegateAnswerTo?: (targetId: string, options?: { isSelf?: boolean }) => void;
   triggerBuzzer?: () => void;
+  resetUltimateRound?: () => void;
 }
 
 export interface QuizRuntime {

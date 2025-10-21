@@ -18,7 +18,7 @@ import { mqttService } from "@/lib/mqtt/client";
 import { useMqttSubscription } from "@/lib/mqtt/hooks";
 import { MQTT_TOPICS } from "@/config/control";
 import { useAppStore } from "@/store/useAppStore";
-import { useQuizStore } from "@/store/quizStore";
+import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
 import { useQuizRuntime } from "@/features/quiz/useQuizRuntime";
 import { CONTEST_MODES, DEFAULT_MODE } from "@/features/quiz/modes";
 import {
@@ -28,6 +28,7 @@ import {
   QuizQuestion,
   StandardQuestion,
   StandardQuestionOption,
+  StandardQuestionType,
 } from "@/features/quiz/types";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
 import {
@@ -36,10 +37,10 @@ import {
   FillDrawingBoardEmptyError,
 } from "@/features/quiz/components/FillDrawingBoard";
 import type { SmoothSerializedStroke } from "@/features/quiz/components/SmoothDrawingCanvas";
+import { resolveStatusFieldKey } from "@/features/quiz/status";
 import trashIcon from "@/components/icons/trash.svg";
 import styles from "./page.module.css";
 
-const MODE_LIST = Object.values(CONTEST_MODES);
 const DEFAULT_NOTIFY_OFFSET = 68;
 const FILL_SKETCH_CACHE_LIMIT = 10;
 const FILL_PREVIEW_STORAGE_KEY = "quiz-fill-preview-cache";
@@ -266,6 +267,160 @@ function resolveScoreFieldKey(
   }
 
   return undefined;
+}
+
+function resolvePrimaryScoreField(
+  fields?: Record<string, unknown>
+): { key: string; value: string | number } | undefined {
+  if (!fields) return undefined;
+
+  const preferredKeys = [
+    "得分",
+    "总分",
+    "分数",
+    "score",
+    "Score",
+    "当前得分",
+    "总得分",
+  ];
+
+  for (const key of preferredKeys) {
+    const raw = fields[key];
+    if (
+      raw !== undefined &&
+      raw !== null &&
+      (typeof raw === "string" || typeof raw === "number")
+    ) {
+      return { key, value: raw };
+    }
+  }
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value === "number") {
+      return { key, value };
+    }
+  }
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value === "string" && value.trim()) {
+      return { key, value };
+    }
+  }
+
+  return undefined;
+}
+
+function formatTimestamp(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return "";
+  try {
+    return new Date(timestamp).toLocaleString();
+  } catch (error) {
+    console.warn("Failed to format timestamp", error);
+    return String(timestamp);
+  }
+}
+
+function resolveStandardTypeLabel(type: StandardQuestionType): string {
+  switch (type) {
+    case "single":
+      return "单选题";
+    case "multiple":
+      return "多选题";
+    case "indeterminate":
+      return "不定项选择题";
+    case "boolean":
+      return "判断题";
+    case "wordbank":
+      return "点选题";
+    case "matching":
+      return "连线题";
+    case "fill":
+      return "填空题";
+    default:
+      return "题目";
+  }
+}
+
+function resolveOceanTypeLabel(question: CustomOceanQuestion): string {
+  const raw = question.extra as Record<string, unknown> | undefined;
+  const rawType =
+    raw && typeof raw.type === "string" ? raw.type.trim() : undefined;
+  if (rawType) return rawType;
+  if (question.categories.length > 0 && question.categories[0]) {
+    return String(question.categories[0]);
+  }
+  return "题目";
+}
+
+function resolveOceanSelectionMode(
+  question: CustomOceanQuestion
+): "single" | "multiple" {
+  const answers = question.correctAnswerIds ?? [];
+  if (answers.length > 1) return "multiple";
+
+  const raw = question.extra as Record<string, unknown> | undefined;
+  const rawType =
+    raw && typeof raw.type === "string"
+      ? raw.type.trim().toLowerCase()
+      : undefined;
+
+  if (rawType) {
+    if (
+      rawType.includes("多选") ||
+      rawType.includes("多项") ||
+      rawType.includes("multiple")
+    ) {
+      return "multiple";
+    }
+    if (
+      rawType.includes("单选") ||
+      rawType.includes("判断") ||
+      rawType.includes("是非") ||
+      rawType.includes("single") ||
+      rawType.includes("boolean")
+    ) {
+      return "single";
+    }
+  }
+
+  if (question.categories.some((item) => /多/.test(item))) {
+    return "multiple";
+  }
+
+  return "single";
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function sortOceanSelectionIds(
+  rawValues: (string | number)[],
+  optionPool: CustomOceanQuestion["optionPool"]
+): string[] {
+  const normalized = dedupeStrings(rawValues.map((value) => String(value)));
+  if (normalized.length === 0) return [];
+
+  const ordered: string[] = [];
+  for (const option of optionPool) {
+    if (normalized.includes(option.id)) {
+      ordered.push(option.id);
+    }
+  }
+
+  if (ordered.length === normalized.length) {
+    return ordered;
+  }
+
+  const remaining = normalized.filter((value) => !ordered.includes(value));
+  return [...ordered, ...remaining];
 }
 
 function ClockIcon({ className }: { className?: string }) {
@@ -497,6 +652,7 @@ export default function QuizPage() {
   const delegateAnswerToControl = controls.delegateAnswerTo;
   const triggerBuzzerControl = controls.triggerBuzzer;
   const applyHostJudgementControl = controls.applyHostJudgement;
+  const resetUltimateRoundControl = controls.resetUltimateRound;
   const {
     currentStage,
     teamProfile,
@@ -506,6 +662,11 @@ export default function QuizPage() {
     normalizedQuestions,
     teamProfiles,
     ensureTeamProfile,
+    oceanRemainingCount,
+    questionLoadStatus,
+    questionLoadAttempts,
+    questionLoadError,
+    questionGateOpened,
   } = useQuizStore(
     useShallow((storeState) => ({
       currentStage: storeState.currentStage,
@@ -516,6 +677,11 @@ export default function QuizPage() {
       normalizedQuestions: storeState.questions,
       teamProfiles: storeState.teamProfiles,
       ensureTeamProfile: storeState.ensureTeamProfile,
+      oceanRemainingCount: storeState.oceanRemainingCount,
+      questionLoadStatus: storeState.questionLoadStatus,
+      questionLoadAttempts: storeState.questionLoadAttempts,
+      questionLoadError: storeState.questionLoadError,
+      questionGateOpened: storeState.questionGateOpened,
     }))
   );
   const [selected, setSelected] = useState<string | string[] | null>(null);
@@ -557,6 +723,18 @@ export default function QuizPage() {
   const [activeMatchingLeft, setActiveMatchingLeft] = useState<string | null>(null);
   const matchingBoardRef = useRef<HTMLDivElement | null>(null);
   const [matchingLines, setMatchingLines] = useState<MatchingLineSegment[]>([]);
+  const [oceanStats, setOceanStats] = useState<{
+    total?: number;
+    correct?: number;
+    wrong?: number;
+    score?: number;
+    accuracy?: number;
+    lastAnswerTime?: number;
+  } | null>(null);
+  const [oceanStatsStatus, setOceanStatsStatus] = useState<"idle" | "loading" | "success" | "error">(
+    "idle"
+  );
+  const [oceanStatsError, setOceanStatsError] = useState<string | null>(null);
   const [matchingOverlaySize, setMatchingOverlaySize] = useState<{ width: number; height: number }>(
     { width: 0, height: 0 }
   );
@@ -565,11 +743,12 @@ export default function QuizPage() {
     questionId: null,
     timestamp: 0,
   });
+  const lastResultTimestampRef = useRef<number>(0);
   const [lockedWinnerId, setLockedWinnerId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
-      Toast.info("请先登录");
+      Toast.info("请先登录",500);
       router.replace("/login");
     }
   }, [isAuthenticated, router]);
@@ -637,11 +816,29 @@ export default function QuizPage() {
   }, [isWordbankQuestion, question]);
 
   useEffect(() => {
-    if (meta.id !== "ultimate-challenge") return;
-    lastBuzzResultRef.current = {
-      questionId,
-      timestamp: 0,
-    };
+    if (meta.id !== "ultimate-challenge") {
+      lastBuzzResultRef.current = {
+        questionId: null,
+        timestamp: 0,
+      };
+      lastResultTimestampRef.current = 0;
+      return;
+    }
+
+    if (!questionId) {
+      lastBuzzResultRef.current = {
+        questionId: null,
+        timestamp: 0,
+      };
+      return;
+    }
+
+    if (lastBuzzResultRef.current.questionId !== questionId) {
+      lastBuzzResultRef.current = {
+        questionId,
+        timestamp: 0,
+      };
+    }
   }, [meta.id, questionId]);
 
   const wordbankOptionLabelMap = useMemo(() => {
@@ -756,7 +953,8 @@ export default function QuizPage() {
         : typeof selected === "string" && selected
         ? [selected]
         : [];
-      const letters = values
+      const orderedIds = sortOceanSelectionIds(values, question.optionPool);
+      const letters = orderedIds
         .map((value) => {
           const index = question.optionPool.findIndex((option) => option.id === value);
           return index >= 0 ? String.fromCharCode(65 + index) : "";
@@ -1006,6 +1204,10 @@ export default function QuizPage() {
     if (ultimateStage !== "buzz") return;
     if (!questionId) return;
 
+    if (resultMessage.timestamp <= lastResultTimestampRef.current) {
+      return;
+    }
+
     const previous = lastBuzzResultRef.current;
     if (previous.questionId === questionId && resultMessage.timestamp <= previous.timestamp) {
       return;
@@ -1033,6 +1235,7 @@ export default function QuizPage() {
       questionId,
       timestamp: resultMessage.timestamp,
     };
+    lastResultTimestampRef.current = resultMessage.timestamp;
     setCanBuzz(false);
 
     const currentUserId = user?.id ? String(user.id) : null;
@@ -1178,13 +1381,21 @@ export default function QuizPage() {
     }
   }, [questionId]);
 
-  const totalQuestions = state.totalQuestions;
-  const currentIndex = state.questionIndex >= 0 ? state.questionIndex : 0;
-  const showProgress = totalQuestions !== undefined && totalQuestions > 0;
+  const totalQuestions =
+    typeof state.totalQuestions === "number" && Number.isFinite(state.totalQuestions)
+      ? state.totalQuestions
+      : undefined;
+  const questionOrdinal = state.questionIndex >= 0 ? state.questionIndex + 1 : 0;
+  const showProgress = typeof totalQuestions === "number" && totalQuestions > 0;
   const progress = useMemo(() => {
     if (!showProgress) return 0;
-    return Math.round(((currentIndex + 1) / (totalQuestions || 1)) * 100);
-  }, [currentIndex, showProgress, totalQuestions]);
+    const denominator = totalQuestions && totalQuestions > 0 ? totalQuestions : 1;
+    const ratio = questionOrdinal / denominator;
+    if (!Number.isFinite(ratio)) return 0;
+    const percentage = Math.round(ratio * 100);
+    return Math.min(100, Math.max(0, percentage));
+  }, [questionOrdinal, showProgress, totalQuestions]);
+  const progressValue = Number.isFinite(progress) ? progress : 0;
 
   const hpDisplay = meta.features.hasHp
     ? {
@@ -1193,7 +1404,84 @@ export default function QuizPage() {
       }
     : null;
 
+  const isOceanEliminated =
+    meta.id === "ocean-adventure" && (hpDisplay?.current ?? 0) <= 0;
   const isEliminated = meta.id === "last-stand" && (hpDisplay?.current ?? 0) <= 0;
+
+  const oceanRemainingDisplay =
+    meta.id === "ocean-adventure"
+      ? Math.max(
+          0,
+          typeof oceanRemainingCount === "number" && Number.isFinite(oceanRemainingCount)
+            ? Math.floor(oceanRemainingCount)
+            : DEFAULT_OCEAN_REMAINING_COUNT
+        )
+      : null;
+
+  useEffect(() => {
+    if (!isOceanEliminated) {
+      if (oceanStatsStatus !== "idle") {
+        setOceanStats(null);
+        setOceanStatsStatus("idle");
+        setOceanStatsError(null);
+      }
+      return;
+    }
+    if (!user?.id) return;
+    if (oceanStatsStatus === "loading" || oceanStatsStatus === "success") return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const fetchStats = async () => {
+      setOceanStatsStatus("loading");
+      setOceanStatsError(null);
+      try {
+        const response = await fetch(`/api/user/${encodeURIComponent(user.id)}/answers`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`成绩查询失败: ${response.status}`);
+        }
+        const data = await response.json();
+        if (cancelled) return;
+        if (data?.success && data?.stats) {
+          setOceanStats({
+            total: typeof data.stats.total === "number" ? data.stats.total : undefined,
+            correct: typeof data.stats.correct === "number" ? data.stats.correct : undefined,
+            wrong: typeof data.stats.wrong === "number" ? data.stats.wrong : undefined,
+            score: typeof data.stats.score === "number" ? data.stats.score : undefined,
+            accuracy: typeof data.stats.accuracy === "number" ? data.stats.accuracy : undefined,
+            lastAnswerTime:
+              typeof data.stats.lastAnswerTime === "number"
+                ? data.stats.lastAnswerTime
+                : undefined,
+          });
+          setOceanStatsStatus("success");
+          return;
+        }
+        throw new Error("成绩数据格式不正确");
+      } catch (error) {
+        if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
+        }
+        console.error("Failed to fetch ocean stats", error);
+        setOceanStatsStatus("error");
+        setOceanStatsError(error instanceof Error ? error.message : "成绩同步失败");
+      }
+    };
+
+    void fetchStats();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [isOceanEliminated, oceanStatsStatus, user?.id]);
+
+  const handleRetryOceanStats = useCallback(() => {
+    if (!isOceanEliminated) return;
+    setOceanStatsStatus("idle");
+    setOceanStatsError(null);
+  }, [isOceanEliminated]);
 
   const buzzerStatusLabel = useMemo(() => {
     if (!meta.features.requiresBuzzer) return null;
@@ -1215,13 +1503,6 @@ export default function QuizPage() {
         return state.awaitingHost ? "未抢答" : "等待裁决";
     }
   }, [meta.features.requiresBuzzer, meta.id, state.awaitingHost, ultimateStage]);
-
-  const handleModeChange = (nextMode: ContestModeId) => {
-    setMode(nextMode);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("mode", nextMode);
-    router.replace(`/quiz?${params.toString()}`);
-  };
 
   const handleSelect = (value: string) => {
     setSelected(value);
@@ -1554,7 +1835,10 @@ export default function QuizPage() {
 
       setSubmitting(true);
       try {
-        const result = await controls.submitAnswer(submissionValue);
+        const submissionResult = await controls.submitAnswer(submissionValue);
+        const isCorrect = submissionResult?.correct;
+        const hpAfterAnswer = submissionResult?.hpAfterAnswer;
+        const rawResult = submissionResult?.rawResult;
 
         if (shouldHandleSubmitCommand && isStandardQuestion(currentQuestion)) {
           const questionKey = currentQuestion.id;
@@ -1569,7 +1853,7 @@ export default function QuizPage() {
           const scoreRecordId = scoreRecord?.recordId;
           const userId = user?.id ?? undefined;
           const answerForSheet = questionSheetAnswer || "未选";
-          const correctness = result === true ? "1" : "0";
+          const correctness = isCorrect === true ? "1" : "0";
           const scoreAnswerValue =
             currentQuestion.type === "fill" ? "填空" : correctness;
           const lightValue: "0" | "1" = correctness === "1" ? "1" : "0";
@@ -1598,6 +1882,14 @@ export default function QuizPage() {
           }
 
           if (scoreSheetId && scoreRecordId && scoreFieldKey) {
+            const statusFieldKey =
+              meta.id === "last-stand"
+                ? resolveStatusFieldKey(scoreRecord?.fields)
+                : undefined;
+            const hpStatusValue =
+              meta.id === "last-stand" && typeof hpAfterAnswer === "number"
+                ? String(Math.max(0, Math.trunc(hpAfterAnswer)))
+                : undefined;
             persistenceTasks.push(
               submitJudgeResult({
                 datasheetId: scoreSheetId,
@@ -1606,6 +1898,8 @@ export default function QuizPage() {
                 answer: scoreAnswerValue,
                 time: timeSeconds,
                 light: lightValue,
+                statusFieldKey,
+                status: hpStatusValue,
               })
             );
           }
@@ -1637,13 +1931,13 @@ export default function QuizPage() {
         } else {
           setCommandSubmissionLocked(false);
           if (showCorrectness) {
-            if (result === true) {
+            if (isCorrect === true) {
               Notify.success({
                 content: "回答正确",
                 style: notifyStyle,
                 duration: 500,
               });
-            } else if (result === false) {
+            } else if (isCorrect === false) {
               Notify.error({
                 content: "回答错误",
                 style: notifyStyle,
@@ -1662,7 +1956,29 @@ export default function QuizPage() {
         }
 
         if (meta.id === "ocean-adventure") {
-          await controls.requestNextQuestion();
+          if (submissionResult?.stats || submissionResult?.score) {
+            setOceanStats((prev) => ({
+              total: submissionResult.stats?.total ?? prev?.total,
+              correct: submissionResult.stats?.correct ?? prev?.correct,
+              wrong: submissionResult.stats?.wrong ?? prev?.wrong,
+              accuracy: submissionResult.stats?.accuracy ?? prev?.accuracy,
+              lastAnswerTime:
+                submissionResult.stats?.lastAnswerTime ?? prev?.lastAnswerTime,
+              score: submissionResult.score?.total ?? prev?.score,
+            }));
+            setOceanStatsError(null);
+            if (typeof hpAfterAnswer === "number" && hpAfterAnswer <= 0) {
+              setOceanStatsStatus("success");
+            }
+          }
+
+          const shouldSkipNext =
+            rawResult === "wrong" &&
+            typeof hpAfterAnswer === "number" &&
+            hpAfterAnswer <= 0;
+          if (!shouldSkipNext) {
+            await controls.requestNextQuestion();
+          }
         }
       } catch (error) {
         Toast.error("提交失败，请稍后重试");
@@ -1682,6 +1998,9 @@ export default function QuizPage() {
       selected,
       matchingPairs,
       shouldHandleSubmitCommand,
+      setOceanStats,
+      setOceanStatsError,
+      setOceanStatsStatus,
       state.answeringEnabled,
       state.questionIndex,
       submitAnswerChoice,
@@ -1694,12 +2013,21 @@ export default function QuizPage() {
 
   useEffect(() => {
     if (!commandMessage) return;
-    if (boardStatus === "uploading" || boardStatus === "success") return;
     const rawPayload = commandMessage.payload.trim();
+    const isNumericCommand = /^\d+$/.test(rawPayload);
 
-    if (/^\d+$/.test(rawPayload)) {
+    if (isNumericCommand) {
       setCommandSubmissionLocked(false);
+      if (meta.id === "ultimate-challenge") {
+        resetUltimateRoundControl?.();
+        setCanBuzz(false);
+        setLockedWinnerId(null);
+        lastBuzzResultRef.current = { questionId: null, timestamp: 0 };
+      }
+      return;
     }
+
+    if (boardStatus === "uploading" || boardStatus === "success") return;
 
     if (!shouldHandleSubmitCommand) return;
     if (rawPayload.toLowerCase() !== "submit") return;
@@ -1743,7 +2071,9 @@ export default function QuizPage() {
     boardRef,
     commandMessage,
     handleSubmit,
+    meta.id,
     question,
+    resetUltimateRoundControl,
     shouldHandleSubmitCommand,
   ]);
 
@@ -1791,9 +2121,129 @@ export default function QuizPage() {
         <SuccessCheckIcon />
       </div>
       <p className={styles.commandSubmissionTitle}>提交成功</p>
-      <p className={styles.commandSubmissionSubtitle}>主持人已锁定本题，请等待切题指令。</p>
+      <p className={styles.commandSubmissionSubtitle}>请等待大屏公示</p>
     </div>
   );
+
+  const renderOceanResult = () => {
+    const fields = scoreRecord?.fields;
+    const primary = resolvePrimaryScoreField(fields);
+    const statsScore =
+      oceanStats && typeof oceanStats.score === "number" ? oceanStats.score : undefined;
+    const scoreInfo = statsScore !== undefined
+      ? { value: statsScore, hint: "统计得分" }
+      : primary
+      ? { value: primary.value, hint: primary.key }
+      : null;
+
+    const displayEntries: Array<[string, string]> = [];
+    const pushEntry = (label: string, value: string | number | undefined) => {
+      if (value === undefined || value === null) return;
+      const text = typeof value === "number" ? value.toString() : value.trim();
+      if (!text) return;
+      displayEntries.push([label, typeof value === "number" ? value.toString() : text]);
+    };
+    const seenKeys = new Set<string>();
+
+    if (oceanStats) {
+      pushEntry("作答题数", oceanStats.total);
+      pushEntry("答对", oceanStats.correct);
+      pushEntry("答错", oceanStats.wrong);
+      if (typeof oceanStats.accuracy === "number") {
+        const percentage = `${Math.round(oceanStats.accuracy * 1000) / 10}%`;
+        pushEntry("正确率", percentage);
+      }
+      if (typeof oceanStats.lastAnswerTime === "number") {
+        pushEntry("最后作答时间", formatTimestamp(oceanStats.lastAnswerTime));
+      }
+      for (const [label] of displayEntries) {
+        seenKeys.add(label);
+      }
+    }
+
+    if (fields) {
+      for (const [key, value] of Object.entries(fields)) {
+        if (primary && key === primary.key) continue;
+        if (seenKeys.has(key)) continue;
+        if (typeof value === "number" || (typeof value === "string" && value.trim())) {
+          pushEntry(key, value);
+          seenKeys.add(key);
+        }
+      }
+    }
+
+    const isLoadingStats = oceanStatsStatus === "loading";
+    const isErrorStats = oceanStatsStatus === "error";
+    const canRetry = isErrorStats && isOceanEliminated;
+
+    let statusMessage = "成绩正在同步中，请稍候查看最新得分。";
+    if (isLoadingStats) {
+      statusMessage = "正在获取最新成绩，请稍候...";
+    } else if (isErrorStats) {
+      statusMessage = oceanStatsError ?? "成绩同步失败，请稍后重试。";
+    } else if (scoreInfo) {
+      if (displayEntries.length === 0) {
+        statusMessage = "成绩已更新，请等待主持人下一步指令。";
+      } else {
+        statusMessage = "";
+      }
+    }
+
+    return (
+      <div className={styles.oceanResultWrapper}>
+        <div className={styles.commandSubmissionResult}>
+          <div className={styles.commandSubmissionBadge}>
+            <EliminatedIcon />
+          </div>
+          <p className={styles.commandSubmissionTitle}>挑战结束</p>
+          <p className={styles.commandSubmissionSubtitle}>
+            血量已耗尽，本轮成绩已锁定，请等待主持人下一步指令。
+          </p>
+        </div>
+
+        <div className={styles.oceanResultScoreCard}>
+          <div className={styles.oceanResultScore}>
+            <span className={styles.oceanResultLabel}>当前得分</span>
+            <span className={styles.oceanResultValue}>
+              {scoreInfo ? String(scoreInfo.value) : "--"}
+            </span>
+            {scoreInfo ? (
+              <span className={styles.oceanResultKeyHint}>{scoreInfo.hint}</span>
+            ) : null}
+          </div>
+
+          {displayEntries.length > 0 ? (
+            <dl className={styles.oceanResultList}>
+              {displayEntries.map(([key, value]) => (
+                <div key={key} className={styles.oceanResultItem}>
+                  <dt className={styles.oceanResultItemKey}>{key}</dt>
+                  <dd className={styles.oceanResultItemValue}>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+
+          {statusMessage ? (
+            <p
+              className={`${styles.oceanResultMessage} ${
+                isErrorStats ? styles.oceanResultMessageError : ""
+              }`}
+            >
+              {statusMessage}
+            </p>
+          ) : null}
+
+          {canRetry ? (
+            <div className={styles.oceanResultActions}>
+              <Button type="ghost" size="small" onClick={handleRetryOceanStats}>
+                重新获取成绩
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
 
   const renderEliminationState = () => (
     <div className={styles.commandSubmissionResult}>
@@ -1801,7 +2251,7 @@ export default function QuizPage() {
         <EliminatedIcon />
       </div>
       <p className={styles.commandSubmissionTitle}>您已淘汰</p>
-      <p className={styles.commandSubmissionSubtitle}>血量已耗尽，本轮无法继续作答。</p>
+      <p className={styles.commandSubmissionSubtitle}>血量已耗尽，无法继续作答。</p>
     </div>
   );
 
@@ -2084,11 +2534,45 @@ export default function QuizPage() {
   };
 
   const renderOceanOptions = (ocean: CustomOceanQuestion) => {
-    const values = Array.isArray(selected) ? selected : [];
+    const selectionMode = resolveOceanSelectionMode(ocean);
+    const values =
+      selectionMode === "single"
+        ? (() => {
+            if (typeof selected === "string" && selected) return [selected];
+            if (Array.isArray(selected) && selected.length > 0) {
+              const last = selected[selected.length - 1];
+              return last ? [String(last)] : [];
+            }
+            return [];
+          })()
+        : sortOceanSelectionIds(
+            Array.isArray(selected)
+              ? selected
+              : typeof selected === "string" && selected
+              ? [selected]
+              : [],
+            ocean.optionPool
+          );
+
+    const handleChange = (rawValues: (string | number)[]) => {
+      if (selectionMode === "single") {
+        if (!rawValues || rawValues.length === 0) {
+          setSelected(null);
+          return;
+        }
+        const last = String(rawValues[rawValues.length - 1]);
+        handleSelect(last);
+        return;
+      }
+
+      const normalized = sortOceanSelectionIds(rawValues, ocean.optionPool);
+      setSelected(normalized);
+    };
+
     return (
       <Checkbox.Group
         value={values}
-        onChange={handleMultiSelect}
+        onChange={handleChange}
         layout="block"
         className={styles.optionGroup}
         icons={null}
@@ -2116,6 +2600,10 @@ export default function QuizPage() {
   };
 
   const renderQuestionContent = () => {
+    if (isOceanEliminated) {
+      return renderOceanResult();
+    }
+
     if (isEliminated) {
       return renderEliminationState();
     }
@@ -2171,6 +2659,9 @@ export default function QuizPage() {
       }
 
       if (ultimateStage !== "answer") {
+        if (isCommandSubmissionLocked) {
+          return renderCommandSubmissionResult();
+        }
         return (
           <div className={styles.ultimateWrapper}>
             <p className={styles.ultimateHint}>等待主持人通知作答，请保持专注。</p>
@@ -2284,23 +2775,7 @@ export default function QuizPage() {
         <>
           <div className={styles.questionHeader}>
             <div className={styles.questionHeaderLeft}>
-              <span className={styles.questionTag}>
-                {question.type === "single"
-                  ? "单选题"
-                  : question.type === "multiple"
-                  ? "多选题"
-                  : question.type === "indeterminate"
-                  ? "不定项选择题"
-                  : question.type === "boolean"
-                  ? "判断题"
-                  : question.type === "wordbank"
-                  ? "点选题"
-                  : question.type === "matching"
-                  ? "连线题"
-                  : question.type === "fill"
-                  ? "填空题"
-                  : "题目"}
-              </span>
+              <span className={styles.questionTag}>{resolveStandardTypeLabel(question.type)}</span>
             </div>
             <div className={styles.questionHeaderRight}>
               {selectionSummary ? (
@@ -2326,16 +2801,12 @@ export default function QuizPage() {
                       </Tag>
                     ))
                   ) : (
-                    <Tag size="small" filleted={true} type="outline" className={styles.selectionTagMuted}>
+                    <Tag size="small" filleted={true} type="hollow" className={styles.selectionTagMuted}>
                       {selectionSummary.emptyLabel ?? "未选"}
                     </Tag>
                   )}
                 </div>
               ) : null}
-              <span className={styles.questionIndex}>
-                第 {state.questionIndex + 1}
-                {showProgress && totalQuestions ? ` / ${totalQuestions}` : ""}
-              </span>
             </div>
           </div>
           {questionTitleNode}
@@ -2352,7 +2823,7 @@ export default function QuizPage() {
       return (
         <>
           <div className={styles.questionHeader}>
-            <span className={styles.questionTag}>题海遨游</span>
+            <span className={styles.questionTag}>{resolveOceanTypeLabel(question)}</span>
             <div className={styles.questionHeaderRight}>
               {selectionSummary ? (
                 <div
@@ -2376,16 +2847,12 @@ export default function QuizPage() {
                       </Tag>
                     ))
                   ) : (
-                    <Tag size="small" type="outline" className={styles.selectionTagMuted}>
+                    <Tag size="small" type="hollow" className={styles.selectionTagMuted}>
                       {selectionSummary.emptyLabel ?? "未选"}
                     </Tag>
                   )}
                 </div>
               ) : null}
-              <span className={styles.questionIndex}>
-                第 {state.questionIndex + 1} 题
-                <span className={styles.oceanHint}> / 预计 600 题</span>
-              </span>
             </div>
           </div>
           <h2 className={styles.questionTitle}>{question.stem}</h2>
@@ -2408,7 +2875,66 @@ export default function QuizPage() {
     return null;
   };
 
+  const renderQuestionLoadingState = () => {
+    if (questionLoadStatus === "error") {
+      const attempts = Math.max(questionLoadAttempts, 1);
+      return (
+        <div className={styles.questionLoading}>
+          <div className={`${styles.statusBadge} ${styles.statusBadgeError}`}>
+            <ErrorBadgeIcon className={styles.statusIcon} />
+          </div>
+          <div className={styles.loadingTexts}>
+            <p className={styles.loadingPrimary}>题目加载出错</p>
+            <p className={styles.loadingSecondary}>请举手示意，告知主持人重新进入环节</p>
+            <p className={styles.loadingMeta}>已尝试 {attempts} 次加载</p>
+            {questionLoadError ? (
+              <p className={styles.loadingMeta} title={questionLoadError}>
+                {questionLoadError}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+
+    if (questionLoadStatus === "success") {
+      return (
+        <div className={styles.questionLoading}>
+          <div className={`${styles.statusBadge} ${styles.statusBadgeSuccess}`}>
+            <SuccessCheckIcon className={styles.statusIcon} />
+          </div>
+          <div className={styles.loadingTexts}>
+            <p className={styles.loadingPrimary}>题目加载完成</p>
+            <p className={styles.loadingSecondary}>请做好准备 比赛即将开始</p>
+            <p className={styles.loadingMeta}>
+              已准备 {normalizedQuestions.length} 道题，等待主持人发出切题指令
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    const attemptLabel =
+      questionLoadAttempts > 0
+        ? `第 ${questionLoadAttempts} 次尝试`
+        : "准备加载题目数据";
+
+    return (
+      <div className={styles.questionLoading}>
+        <div className={`${styles.statusBadge} ${styles.statusBadgePending}`}>
+          <span className={styles.loadingSpinner} aria-hidden="true" />
+        </div>
+        <div className={styles.loadingTexts}>
+          <p className={styles.loadingPrimary}>正在加载题目</p>
+          <p className={styles.loadingSecondary}>{attemptLabel}</p>
+          <p className={styles.loadingMeta}>请保持在线，留意主持人通知</p>
+        </div>
+      </div>
+    );
+  };
+
   const hasQuestion = Boolean(question);
+  const showQuestionLoading = meta.questionFlow === "push" && !questionGateOpened;
   const shouldShowActionBar = meta.id === "speed-run" || meta.id === "ocean-adventure";
   const submitLabel =
     meta.id === "speed-run"
@@ -2430,26 +2956,17 @@ export default function QuizPage() {
             leftContent={null}
           />
         </div>
-
-        <div className={styles.modeSwitch}>
-          {MODE_LIST.map((item) => (
-            <Button
-              key={item.id}
-              type={item.id === mode ? "primary" : "default"}
-              size="small"
-              onClick={() => handleModeChange(item.id)}
-            >
-              {item.name}
-            </Button>
-          ))}
-        </div>
-
         <div className={styles.body}>
           <section className={styles.progressCard}>
             <div className={styles.progressHead}>
               <span className={styles.progressCounter}>
-                {hasQuestion ? state.questionIndex + 1 : 0}
-                {showProgress && totalQuestions ? (
+                {hasQuestion ? questionOrdinal : 0}
+                {meta.id === "ocean-adventure" ? (
+                  <span className={styles.progressTotal}>
+                    {" / "}
+                    {oceanRemainingDisplay ?? DEFAULT_OCEAN_REMAINING_COUNT}
+                  </span>
+                ) : showProgress && totalQuestions ? (
                   <span className={styles.progressTotal}> / {totalQuestions}</span>
                 ) : null}
               </span>
@@ -2489,15 +3006,24 @@ export default function QuizPage() {
                 ) : null}
               </div>
             </div>
-            {showProgress ? (
-              <div className={styles.progressBar}>
-                <Progress percentage={progress} percentPosition="innerLeft" />
+           {showProgress ? (
+             <div className={styles.progressBar}>
+                <Progress
+                  percentage={progressValue}
+                  percentPosition="innerLeft"
+                  mountedTransition={progressValue > 0}
+                />
               </div>
             ) : null}
           </section>
 
-          <section className={styles.questionCard}>{renderQuestionContent()}</section>
-          {meta.features.hasHp && meta.questionFlow === "push" && meta.id !== "last-stand" ? (
+          <section className={styles.questionCard}>
+            {showQuestionLoading ? renderQuestionLoadingState() : renderQuestionContent()}
+          </section>
+          {meta.features.hasHp &&
+          meta.questionFlow === "push" &&
+          meta.id !== "last-stand" &&
+          !showQuestionLoading ? (
             <section className={styles.judgementPanel}>
               <h3 className={styles.panelTitle}>主持人判定</h3>
               <div className={styles.judgementActions}>

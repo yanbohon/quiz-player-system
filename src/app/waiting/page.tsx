@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Cell, Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -10,9 +10,13 @@ import { Toast } from "@/lib/arco";
 import { mqttService } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
+import { CONTEST_MODES } from "@/features/quiz/modes";
+import { resolveStatusFieldKey } from "@/features/quiz/status";
+import { resolveModeForStage } from "@/features/quiz/useControlCommands";
 import { MQTT_TOPICS } from "@/config/control";
 import LogoutIcon from "@/components/icons/logout.svg";
 import styles from "./page.module.css";
+import IconNotice from '@arco-design/mobile-react/esm/icon/IconNotice';
 
 export default function WaitingPage() {
   const router = useRouter();
@@ -24,19 +28,78 @@ export default function WaitingPage() {
       logout: state.logout,
     }))
   );
-  const { selectedEvent, teamProfile } = useQuizStore(
+  const { selectedEvent, teamProfile, currentStage, scoreRecord, updateScoreStatus } = useQuizStore(
     useShallow((state) => ({
       selectedEvent: state.selectedEvent,
       teamProfile: state.teamProfile,
+      currentStage: state.currentStage,
+      scoreRecord: state.scoreRecord,
+      updateScoreStatus: state.updateScoreStatus,
     }))
   );
+  const statusResetRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
-      Toast.info("请先登录");
+      Toast.info("请先登录",500);
       router.replace("/login");
     }
   }, [isAuthenticated, router]);
+
+  useEffect(() => {
+    if (!currentStage || !scoreRecord) return;
+
+    const mode = resolveModeForStage(currentStage);
+    if (mode !== "last-stand") return;
+
+    const scoreSheetId = currentStage.scoreSheetId;
+    const recordId = scoreRecord.recordId;
+    if (!scoreSheetId || !recordId) return;
+
+    const statusFieldKey = resolveStatusFieldKey(scoreRecord.fields);
+    if (!statusFieldKey) return;
+
+    const initialHp =
+      CONTEST_MODES["last-stand"].features.initialHp ?? 0;
+    if (!Number.isFinite(initialHp) || initialHp <= 0) return;
+
+    const statusValue = String(Math.max(0, Math.trunc(initialHp)));
+    const cacheKey = `${recordId}:${statusValue}`;
+    if (statusResetRef.current === cacheKey) return;
+
+    const currentStatus = scoreRecord.fields[statusFieldKey];
+    if (
+      currentStatus !== undefined &&
+      currentStatus !== null &&
+      String(currentStatus) === statusValue
+    ) {
+      statusResetRef.current = cacheKey;
+      return;
+    }
+
+    let cancelled = false;
+
+    updateScoreStatus({
+      datasheetId: scoreSheetId,
+      recordId,
+      fieldKey: statusFieldKey,
+      status: statusValue,
+    })
+      .then(() => {
+        if (!cancelled) {
+          statusResetRef.current = cacheKey;
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("重置血量状态失败", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentStage, scoreRecord, updateScoreStatus]);
 
   const getInitial = () => {
     if (user?.name) {
@@ -78,8 +141,8 @@ export default function WaitingPage() {
         />
 
         <div className={styles.body}>
-          <NoticeBar className={styles.notice} marquee="none">
-            请保持设备在线并关注主持人指令，答题开始后再点击进入答题页。
+          <NoticeBar className={styles.notice} marquee="none" leftContent={<IconNotice />}>
+          请核对队伍信息是否正确，如有问题请举手反馈。
           </NoticeBar>
 
           <div className={styles.card}>
@@ -109,8 +172,8 @@ export default function WaitingPage() {
             </Cell.Group>
 
             <div className={styles.loading}>
-              <Loading type="spin" stroke={3} />
-              <p className={styles.loadingText}>等待主持人开始比赛...</p>
+              <Loading type="dot" stroke={3} />
+              <p className={styles.loadingText}>等待开始比赛...</p>
             </div>
           </div>
         </div>
