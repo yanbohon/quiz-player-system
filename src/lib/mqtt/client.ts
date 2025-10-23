@@ -13,6 +13,7 @@ export interface MqttConfig {
   clean?: boolean;
   connectTimeout?: number;
   reconnectPeriod?: number;
+  protocolVersion?: 4 | 5;
   will?: IClientOptions["will"];
 }
 
@@ -26,7 +27,6 @@ class MqttService {
   private client: MqttClient | null = null;
   private subscribers: Map<string, Set<(message: string) => void>> = new Map();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private isConnecting = false;
   private connectPromise: Promise<void> | null = null;
   private connectionListeners = new Set<(status: ConnectionStatus) => void>();
@@ -72,22 +72,24 @@ class MqttService {
         }
       };
 
-      const resolveConnection = () => {
-        if (settled) return;
-        settled = true;
+      const finalize = () => {
         clearPendingTimeout();
-        this.reconnectAttempts = 0;
         this.isConnecting = false;
         this.connectPromise = null;
+      };
+
+      const resolveConnection = () => {
+        this.reconnectAttempts = 0;
+        finalize();
+        if (settled) return;
+        settled = true;
         resolve();
       };
 
       const rejectConnection = (error: Error) => {
+        finalize();
         if (settled) return;
         settled = true;
-        clearPendingTimeout();
-        this.isConnecting = false;
-        this.connectPromise = null;
         if (this.client && !this.client.connected) {
           this.client.end(true);
           this.client = null;
@@ -100,19 +102,21 @@ class MqttService {
         this.reconnectAttempts = 0;
         this.notifyConnectionStatus("connecting");
 
+        const cleanSession = config.clean ?? true;
+
         const options: IClientOptions = {
           clientId:
             config.clientId || `contestant_${Math.random().toString(16).slice(2, 8)}`,
-          clean: config.clean ?? true,
+          clean: cleanSession,
           connectTimeout: config.connectTimeout ?? 30000,
           reconnectPeriod: config.reconnectPeriod ?? 5000,
           keepalive: config.keepalive ?? 60,
-          protocolVersion: 4,
+          protocolVersion: config.protocolVersion ?? 4,
           resubscribe: true,
           queueQoSZero: false,
         };
 
-        if (!config.clean && config.clientId) {
+        if (!cleanSession && config.clientId) {
           options.clientId = config.clientId;
         }
 
@@ -159,12 +163,6 @@ class MqttService {
           this.reconnectAttempts++;
           console.log(`MQTT reconnecting... (attempt ${this.reconnectAttempts})`);
           this.notifyConnectionStatus("reconnecting");
-
-          if (this.reconnectAttempts >= this.maxReconnectAttempts && client) {
-            console.warn("Max reconnection attempts reached, stopping reconnect");
-            client.end(true);
-            this.notifyConnectionStatus("disconnected");
-          }
         };
 
         const closeHandler = () => {

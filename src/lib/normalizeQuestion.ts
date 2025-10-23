@@ -211,10 +211,12 @@ function sanitizeOptionText(raw: string, leadingKey?: string): string {
     return match[1].trim();
   }
 
-  const genericRegex = /^([A-Za-z0-9]+)[\s\\.．。:：、，,\-\\)）]+(.*)$/;
-  const genericMatch = genericRegex.exec(trimmed);
-  if (genericMatch && genericMatch[2]) {
-    return genericMatch[2].trim();
+  if (!leadingKey) {
+    const genericRegex = /^([A-Za-z0-9]+)[\s\\.．。:：、，,\-\\)）]+(.*)$/;
+    const genericMatch = genericRegex.exec(trimmed);
+    if (genericMatch && genericMatch[2]) {
+      return genericMatch[2].trim();
+    }
   }
 
   const punctuationTrimmed = trimmed.replace(/^[\\s\\.．。:：、，,\\-\\)）]+/, "").trim();

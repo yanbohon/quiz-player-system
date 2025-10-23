@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -155,6 +155,108 @@ function mapToMatchingPairs(map: Map<string, string>): string[] {
 function matchingPairsToSheetAnswer(pairs: string[]): string {
   const obj = Object.fromEntries(pairs.map((pair) => pair.split(":")));
   return Object.keys(obj).length > 0 ? JSON.stringify(obj) : "未选";
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+const DEBUG_SHOW_ANSWER = isTruthyEnv(process.env.NEXT_PUBLIC_DEBUG_SHOW_ANSWER);
+
+function formatStandardQuestionAnswer(question: StandardQuestion): string | null {
+  const raw = question.correctAnswer;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+
+  const values = (Array.isArray(raw) ? raw : [raw])
+    .map((value) => (value == null ? "" : String(value).trim()))
+    .filter(Boolean);
+
+  if (values.length === 0) {
+    return null;
+  }
+
+  if (question.type === "matching") {
+    const segments = values
+      .map((pair) => {
+        const [leftRaw, rightRaw] = pair.split(":");
+        const leftId = leftRaw?.trim();
+        const rightId = rightRaw?.trim();
+        if (!leftId && !rightId) {
+          return pair;
+        }
+        const leftLabel =
+          leftId && question.matching?.left
+            ? question.matching.left.find((item) => item.id === leftId)?.label ?? leftId
+            : leftId ?? "";
+        const rightLabel =
+          rightId && question.matching?.right
+            ? question.matching.right.find((item) => item.id === rightId)?.label ?? rightId
+            : rightId ?? "";
+        if (leftLabel && rightLabel) {
+          return `${leftLabel}→${rightLabel}`;
+        }
+        if (leftLabel) return leftLabel;
+        if (rightLabel) return rightLabel;
+        return pair;
+      })
+      .filter(Boolean);
+    return segments.length ? segments.join("，") : null;
+  }
+
+  if (question.type === "wordbank") {
+    const labelMap = new Map(question.options.map((option) => [option.value, option.label]));
+    const labels = values
+      .map((value) => labelMap.get(value) ?? value)
+      .filter((value) => value && value.trim().length > 0);
+    return labels.length ? labels.join(" / ") : null;
+  }
+
+  if (question.type === "fill") {
+    return values.join(" / ") || null;
+  }
+
+  if (question.type === "multiple" || question.type === "indeterminate") {
+    const tokens = values
+      .map((value) => resolveOptionLetter(question, value).trim().toUpperCase())
+      .filter(Boolean)
+      .sort();
+    return tokens.length ? tokens.join("") : null;
+  }
+
+  if (question.type === "single" || question.type === "boolean") {
+    const token = resolveOptionLetter(question, values[0]).trim().toUpperCase();
+    return token || values[0];
+  }
+
+  return values.join(" / ") || null;
+}
+
+function formatOceanQuestionAnswer(question: CustomOceanQuestion): string | null {
+  const rawAnswers = (question.correctAnswerIds ?? []).map((value) => String(value).trim());
+  if (rawAnswers.length > 0) {
+    const ordered = sortOceanSelectionIds(rawAnswers, question.optionPool);
+    const letters = ordered
+      .map((value) => {
+        const index = question.optionPool.findIndex((option) => option.id === value);
+        if (index >= 0) {
+          return String.fromCharCode(65 + index);
+        }
+        return value.toUpperCase();
+      })
+      .filter(Boolean);
+    return letters.length ? letters.join("") : null;
+  }
+
+  const bucketAnswers = (question.correctBuckets ?? []).map((value) => String(value).trim());
+  if (bucketAnswers.length > 0) {
+    return bucketAnswers.filter(Boolean).join(" / ") || null;
+  }
+
+  return null;
 }
 
 const TEAM_IDENTIFIER_KEYS = [
@@ -626,7 +728,7 @@ function canonicalizeWordbankSelections(
   );
 }
 
-export default function QuizPage() {
+function QuizPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialMode = (searchParams.get("mode") as ContestModeId | null) ?? DEFAULT_MODE.id;
@@ -667,6 +769,7 @@ export default function QuizPage() {
     questionLoadAttempts,
     questionLoadError,
     questionGateOpened,
+    waitingForStageStart,
   } = useQuizStore(
     useShallow((storeState) => ({
       currentStage: storeState.currentStage,
@@ -682,6 +785,7 @@ export default function QuizPage() {
       questionLoadAttempts: storeState.questionLoadAttempts,
       questionLoadError: storeState.questionLoadError,
       questionGateOpened: storeState.questionGateOpened,
+      waitingForStageStart: storeState.waitingForStageStart,
     }))
   );
   const [selected, setSelected] = useState<string | string[] | null>(null);
@@ -717,6 +821,7 @@ export default function QuizPage() {
   const [cachedPaths, setCachedPaths] = useState<SmoothSerializedStroke[] | null>(null);
   const lastQuestionIdRef = useRef<string | null>(null);
   const lastSubmitCommandRef = useRef<number | null>(null);
+  const lastCommandHandledRef = useRef<number | null>(null);
   const [notifyOffset, setNotifyOffset] = useState(DEFAULT_NOTIFY_OFFSET);
   const [isCommandSubmissionLocked, setCommandSubmissionLocked] = useState(false);
   const [wordbankActiveIndex, setWordbankActiveIndex] = useState<number | null>(null);
@@ -744,6 +849,9 @@ export default function QuizPage() {
     timestamp: 0,
   });
   const lastResultTimestampRef = useRef<number>(0);
+  const lastStartBuzzingRef = useRef<{ timestamp: number | null; questionId: string | null } | null>(
+    null
+  );
   const [lockedWinnerId, setLockedWinnerId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -855,6 +963,22 @@ export default function QuizPage() {
     const blanks = wordbankTemplate.blankIds.length;
     return canonicalizeWordbankSelections(selected, blanks, wordbankOptions);
   }, [isWordbankQuestion, selected, wordbankOptions, wordbankTemplate]);
+
+  const debugAnswerText = useMemo(() => {
+    if (!DEBUG_SHOW_ANSWER || !question) {
+      return null;
+    }
+
+    if (isStandardQuestion(question)) {
+      return formatStandardQuestionAnswer(question) ?? "无答案";
+    }
+
+    if (isOceanQuestion(question)) {
+      return formatOceanQuestionAnswer(question) ?? "无答案";
+    }
+
+    return "无答案";
+  }, [question]);
 
   const selectionSummary = useMemo<{
     tokens: string[];
@@ -1189,11 +1313,25 @@ export default function QuizPage() {
 
     const normalizedAction = (action ?? rawPayload).trim().toLowerCase();
     if (normalizedAction !== "start_buzzing") return;
+    const messageTimestamp = controlMessage.timestamp ?? null;
+    const lastStart = lastStartBuzzingRef.current;
+    if (messageTimestamp !== null && lastStart && lastStart.timestamp === messageTimestamp) {
+      if (lastStart.questionId !== questionId) {
+        return;
+      }
+      if (ultimateStage === "buzz") {
+        return;
+      }
+    }
     if (ultimateStage !== "buzz") return;
 
     lastBuzzResultRef.current = {
       questionId,
       timestamp: 0,
+    };
+    lastStartBuzzingRef.current = {
+      timestamp: messageTimestamp,
+      questionId,
     };
     setCanBuzz(true);
     setLockedWinnerId(null);
@@ -2013,10 +2151,15 @@ export default function QuizPage() {
 
   useEffect(() => {
     if (!commandMessage) return;
+    if (commandMessage.timestamp === lastCommandHandledRef.current) {
+      return;
+    }
+
     const rawPayload = commandMessage.payload.trim();
     const isNumericCommand = /^\d+$/.test(rawPayload);
 
     if (isNumericCommand) {
+      lastCommandHandledRef.current = commandMessage.timestamp;
       setCommandSubmissionLocked(false);
       if (meta.id === "ultimate-challenge") {
         resetUltimateRoundControl?.();
@@ -2033,6 +2176,7 @@ export default function QuizPage() {
     if (rawPayload.toLowerCase() !== "submit") return;
     if (commandMessage.timestamp === lastSubmitCommandRef.current) return;
     lastSubmitCommandRef.current = commandMessage.timestamp;
+    lastCommandHandledRef.current = commandMessage.timestamp;
 
     const executeSubmission = async () => {
       if (question && isStandardQuestion(question) && question.type === "fill") {
@@ -2108,7 +2252,6 @@ export default function QuizPage() {
       mqttService.publish(MQTT_TOPICS.buzzIn, payload, { qos: 1 });
       triggerBuzzerControl();
       setCanBuzz(false);
-      Toast.info("抢答中，请等待结果");
     } catch (error) {
       console.error("Failed to publish buzz-in message", error);
       Toast.error("抢答请求发送失败");
@@ -2608,6 +2751,21 @@ export default function QuizPage() {
       return renderEliminationState();
     }
 
+    if (meta.id === "ocean-adventure" && waitingForStageStart) {
+      return (
+        <div className={styles.questionLoading}>
+          <div className={`${styles.statusBadge} ${styles.statusBadgeSuccess}`}>
+            <SuccessCheckIcon className={styles.statusIcon} />
+          </div>
+          <div className={styles.loadingTexts}>
+            <p className={styles.loadingPrimary}>题库准备就绪</p>
+            <p className={styles.loadingSecondary}>请做好准备 比赛即将开始</p>
+            <p className={styles.loadingMeta}>等待主持人发出开始指令</p>
+          </div>
+        </div>
+      );
+    }
+
     if (meta.id === "ultimate-challenge") {
       if (!question && ultimateStage === "waiting") {
         return (
@@ -2770,17 +2928,23 @@ export default function QuizPage() {
 
         return <h2 className={styles.questionTitle}>{question.title}</h2>;
       })();
-      const optionsNode = renderStandardOptions(question);
-      return (
-        <>
-          <div className={styles.questionHeader}>
-            <div className={styles.questionHeaderLeft}>
-              <span className={styles.questionTag}>{resolveStandardTypeLabel(question.type)}</span>
-            </div>
-            <div className={styles.questionHeaderRight}>
-              {selectionSummary ? (
-                <div
-                  className={styles.selectionSummary}
+          const optionsNode = renderStandardOptions(question);
+          return (
+            <>
+              <div className={styles.questionHeader}>
+                <div className={styles.questionHeaderLeft}>
+                  <span className={styles.questionTag}>{resolveStandardTypeLabel(question.type)}</span>
+                  {debugAnswerText ? (
+                    <span className={`${styles.questionTag} ${styles.answerTag}`}>
+                      <span className={styles.answerTagLabel}>答案：</span>
+                      <span className={styles.answerTagValue}>{debugAnswerText}</span>
+                    </span>
+                  ) : null}
+                </div>
+                <div className={styles.questionHeaderRight}>
+                  {selectionSummary ? (
+                    <div
+                      className={styles.selectionSummary}
                   title={
                     selectionSummary.tokens.length
                       ? selectionSummary.tokens.join(" ")
@@ -2823,7 +2987,15 @@ export default function QuizPage() {
       return (
         <>
           <div className={styles.questionHeader}>
-            <span className={styles.questionTag}>{resolveOceanTypeLabel(question)}</span>
+            <div className={styles.questionHeaderLeft}>
+              <span className={styles.questionTag}>{resolveOceanTypeLabel(question)}</span>
+              {debugAnswerText ? (
+                <span className={`${styles.questionTag} ${styles.answerTag}`}>
+                  <span className={styles.answerTagLabel}>答案：</span>
+                  <span className={styles.answerTagValue}>{debugAnswerText}</span>
+                </span>
+              ) : null}
+            </div>
             <div className={styles.questionHeaderRight}>
               {selectionSummary ? (
                 <div
@@ -3083,5 +3255,13 @@ export default function QuizPage() {
         />
       </ArcoClient>
     </div>
+  );
+}
+
+export default function QuizPage() {
+  return (
+    <Suspense fallback={<div className={styles.loadingContainer}>加载中...</div>}>
+      <QuizPageContent />
+    </Suspense>
   );
 }

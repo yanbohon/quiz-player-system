@@ -27,7 +27,7 @@ import {
 type ModeIdInput = ContestModeId | string | null | undefined;
 
 const SPEED_RUN_TIME_LIMIT = 5 * 60; // 5 minutes
-const OCEAN_TIME_LIMIT = 12 * 60; // 12 minutes
+const OCEAN_TIME_LIMIT = 5 * 60; // 5 minutes
 
 function resolveMode(id: ModeIdInput): ContestModeMeta {
   if (!id) return DEFAULT_MODE;
@@ -480,7 +480,6 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const localFetchInFlightRef = useRef(false);
   const pullFetchInFlightRef = useRef(false);
   const emptyPoolHandledRef = useRef(false);
-  const initialOceanFetchAttemptedRef = useRef(false);
 
   const resetTimers = useCallback(() => {
     if (globalTimerRef.current) {
@@ -511,16 +510,6 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   useEffect(() => {
     emptyPoolHandledRef.current = false;
   }, [meta.id]);
-
-  useEffect(() => {
-    if (meta.id !== "ocean-adventure") {
-      initialOceanFetchAttemptedRef.current = false;
-      return;
-    }
-    if (!waitingForStageStart) {
-      initialOceanFetchAttemptedRef.current = false;
-    }
-  }, [meta.id, waitingForStageStart]);
 
   const startGlobalTimer = useCallback(
     (seconds: number) => {
@@ -559,11 +548,14 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         );
 
         if (remainingSeconds <= 0) {
+          const shouldLockOceanResult =
+            meta.id === "ocean-adventure" && meta.features.hasHp;
           stopAll();
           setState((prev) => {
             if (
               prev.timeRemaining === 0 &&
-              prev.timeElapsed === elapsedSeconds
+              prev.timeElapsed === elapsedSeconds &&
+              (!shouldLockOceanResult || (prev.hp ?? 0) === 0)
             ) {
               return prev;
             }
@@ -572,6 +564,8 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
               timeRemaining: 0,
               timeElapsed: elapsedSeconds,
               answeringEnabled: false,
+              hp: shouldLockOceanResult ? 0 : prev.hp,
+              awaitingHost: shouldLockOceanResult ? true : prev.awaitingHost,
             };
           });
           return;
@@ -593,7 +587,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         });
       }, 250);
     },
-    [resetTimers, stopAll]
+    [meta.features.hasHp, meta.id, resetTimers, stopAll]
   );
 
   const markQuestionTime = useCallback(() => {
@@ -816,17 +810,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
 
   useEffect(() => {
     if (meta.questionFlow !== "pull") return;
+    if (meta.id === "ocean-adventure" && waitingForStageStart) return;
     if (quizQuestions.length > 0) return;
-    const shouldAttemptWhileWaiting =
-      meta.id === "ocean-adventure" &&
-      waitingForStageStart &&
-      !initialOceanFetchAttemptedRef.current;
-    if (waitingForStageStart && !shouldAttemptWhileWaiting) return;
     if (!userId || pullFetchInFlightRef.current) return;
-
-    if (shouldAttemptWhileWaiting) {
-      initialOceanFetchAttemptedRef.current = true;
-    }
 
     pullFetchInFlightRef.current = true;
     fetchNextGrabQuestion().finally(() => {
@@ -835,10 +821,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   }, [
     fetchNextGrabQuestion,
     meta.questionFlow,
-    quizQuestions.length,
-    waitingForStageStart,
-    userId,
     meta.id,
+    quizQuestions.length,
+    userId,
+    waitingForStageStart,
   ]);
 
   const evaluateStandardQuestion = useCallback(
@@ -848,12 +834,33 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         return undefined;
       }
       const correct = current.correctAnswer;
+      const questionType = current.type;
+
+      if (questionType === "wordbank") {
+        if (!Array.isArray(correct) || !Array.isArray(value)) {
+          return false;
+        }
+        if (correct.length !== value.length) return false;
+        return correct.every((item, idx) => item === value[idx]);
+      }
+
+      if (questionType === "multiple" || questionType === "indeterminate") {
+        const correctValues = Array.isArray(correct) ? correct : [correct];
+        const valueArray = Array.isArray(value)
+          ? value
+          : typeof value === "string" && value
+          ? [value]
+          : [];
+        const sortedCorrect = [...correctValues].sort();
+        const sortedValue = [...valueArray].sort();
+        return (
+          sortedCorrect.length === sortedValue.length &&
+          sortedCorrect.every((item, idx) => item === sortedValue[idx])
+        );
+      }
+
       if (Array.isArray(correct)) {
         if (!Array.isArray(value)) return false;
-        if (current.type === "wordbank") {
-          if (correct.length !== value.length) return false;
-          return correct.every((item, idx) => item === value[idx]);
-        }
         const sortedCorrect = [...correct].sort();
         const sortedValue = [...value].sort();
         return (

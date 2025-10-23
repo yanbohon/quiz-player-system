@@ -1,0 +1,32 @@
+# ============================================
+# 已部署的环境变量配置
+# 服务: xinsai-player
+# 环境: cloud1-8gzz6a4hc1833f5e
+# 更新时间: 2025-10-21 20:51:00
+# ============================================
+
+# 题海抢题 API
+NEXT_PUBLIC_TIHAI_API_BASE=https://fn.ohvfx.com/quiz-pool/api
+
+# MQTT 实时通信
+NEXT_PUBLIC_MQTT_ENABLED=true
+NEXT_PUBLIC_MQTT_URL=wss://ws.ohvfx.com:8084/mqtt
+NEXT_PUBLIC_MQTT_USERNAME=xdx
+NEXT_PUBLIC_MQTT_PASSWORD=xdx12138
+NEXT_PUBLIC_MQTT_TOPIC_COMMAND=cmd
+NEXT_PUBLIC_MQTT_TOPIC_CONTROL=quiz/control
+NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX=state
+
+# Fusion API
+NEXT_PUBLIC_FUSION_API_BASE=https://api.ohvfx.com/fusion
+NEXT_PUBLIC_FUSION_API_TOKEN=uskOS7wIpVOyV6glpE7eOY6
+NEXT_PUBLIC_FUSION_SPACE_ID=spch5h60Pobkk
+NEXT_PUBLIC_FUSION_EVENT_NODE_ID=foduzcRW7MGLv
+
+# 调试工具
+NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS=false
+
+# 系统配置
+NODE_ENV=production
+NEXT_TELEMETRY_DISABLED=1
+

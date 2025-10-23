@@ -1,0 +1,110 @@
+{
+  "description": "CloudBase 云托管环境变量配置（JSON格式）",
+  "usage": "在 CloudBase 控制台的环境变量配置中，可以导入此配置或逐项添加",
+  "envId": "cloud1-8gzz6a4hc1833f5e",
+  "serverName": "xinsai-player",
+  "环境变量": {
+    "必需配置": {
+      "NEXT_PUBLIC_API_BASE_URL": {
+        "value": "https://your-api-server.com/api",
+        "description": "主 API 服务地址",
+        "required": true,
+        "example": "https://api.example.com/api"
+      },
+      "NEXT_PUBLIC_MQTT_URL": {
+        "value": "wss://your-mqtt-broker.com:8884/mqtt",
+        "description": "MQTT Broker WebSocket 地址（必须 wss://）",
+        "required": true,
+        "example": "wss://mqtt.example.com:8884/mqtt"
+      },
+      "NEXT_PUBLIC_MQTT_USERNAME": {
+        "value": "your_mqtt_username",
+        "description": "MQTT 用户名",
+        "required": true,
+        "sensitive": true
+      },
+      "NEXT_PUBLIC_MQTT_PASSWORD": {
+        "value": "your_mqtt_password",
+        "description": "MQTT 密码",
+        "required": true,
+        "sensitive": true
+      }
+    },
+    "MQTT主题配置": {
+      "NEXT_PUBLIC_MQTT_TOPIC_COMMAND": {
+        "value": "cmd",
+        "description": "命令主题",
+        "required": false
+      },
+      "NEXT_PUBLIC_MQTT_TOPIC_CONTROL": {
+        "value": "quiz/control",
+        "description": "控制主题",
+        "required": false
+      },
+      "NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX": {
+        "value": "state",
+        "description": "状态主题前缀",
+        "required": false
+      },
+      "NEXT_PUBLIC_MQTT_ENABLED": {
+        "value": "true",
+        "description": "是否启用 MQTT（如不需要实时功能设为 false）",
+        "required": false
+      }
+    },
+    "可选配置": {
+      "NEXT_PUBLIC_TIHAI_API_BASE": {
+        "value": "https://znbiakwnyaoe.sealosbja.site/api",
+        "description": "题海 API 地址",
+        "required": false
+      },
+      "NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS": {
+        "value": "false",
+        "description": "React Query 开发工具（生产环境建议 false）",
+        "required": false
+      }
+    },
+    "系统配置（已默认）": {
+      "NODE_ENV": {
+        "value": "production",
+        "description": "运行环境",
+        "readOnly": true
+      },
+      "NEXT_TELEMETRY_DISABLED": {
+        "value": "1",
+        "description": "禁用 Next.js 遥测",
+        "readOnly": true
+      },
+      "NEXT_PUBLIC_BASE_PATH": {
+        "value": "/xinsai-player",
+        "description": "Next.js basePath（与云托管触发路径一致）",
+        "readOnly": true
+      }
+    }
+  },
+  "配置步骤": [
+    "1. 访问 CloudBase 控制台: https://console.cloud.tencent.com/tcb",
+    "2. 选择环境: cloud1-8gzz6a4hc1833f5e",
+    "3. 进入: 云托管 → xinsai-player → 版本配置",
+    "4. 点击: 环境变量",
+    "5. 逐项添加上述环境变量（将 value 替换为实际值）",
+    "6. 保存后等待服务自动重启（约1-2分钟）"
+  ],
+  "快速配置（仅替换值）": {
+    "NEXT_PUBLIC_API_BASE_URL": "https://your-api-server.com/api",
+    "NEXT_PUBLIC_TIHAI_API_BASE": "https://znbiakwnyaoe.sealosbja.site/api",
+    "NEXT_PUBLIC_MQTT_URL": "wss://your-mqtt-broker.com:8884/mqtt",
+    "NEXT_PUBLIC_MQTT_USERNAME": "your_mqtt_username",
+    "NEXT_PUBLIC_MQTT_PASSWORD": "your_mqtt_password",
+    "NEXT_PUBLIC_MQTT_TOPIC_COMMAND": "cmd",
+    "NEXT_PUBLIC_MQTT_TOPIC_CONTROL": "quiz/control",
+    "NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX": "state",
+    "NEXT_PUBLIC_MQTT_ENABLED": "true",
+    "NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS": "false",
+    "NODE_ENV": "production",
+    "NEXT_TELEMETRY_DISABLED": "1",
+    "NEXT_PUBLIC_BASE_PATH": "/xinsai-player"
+  }
+}
+
+

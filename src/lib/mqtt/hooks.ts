@@ -8,11 +8,13 @@ export function useMqtt(config?: MqttConfig) {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const skippedStrictCleanupRef = useRef(process.env.NODE_ENV !== "production");
 
   useEffect(() => {
     if (!config) {
       setIsConnected(false);
       setIsConnecting(false);
+      mqttService.disconnect();
       return;
     }
 
@@ -63,9 +65,13 @@ export function useMqtt(config?: MqttConfig) {
     return () => {
       mounted = false;
       unsubscribeStatus();
-      if (mqttService.isConnected()) {
-        mqttService.disconnect();
+      if (skippedStrictCleanupRef.current) {
+        skippedStrictCleanupRef.current = false;
+        return;
       }
+      mqttService.disconnect();
+      setIsConnected(false);
+      setIsConnecting(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);

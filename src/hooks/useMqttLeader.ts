@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const LEADER_STORAGE_KEY = "contestant-app:mqtt-leader";
-const LEADER_LOCK_TTL = 15_000; // 15 seconds
-const LEADER_RENEW_INTERVAL = 5_000;
-const FOLLOWER_CHECK_INTERVAL = 7_500;
+const LEADER_LOCK_TTL = 3_000; // shorter TTL so stale locks expire quickly
+const LEADER_RENEW_INTERVAL = 1_000;
+const FOLLOWER_CHECK_INTERVAL = 1_500;
 
 interface LeaderRecord {
   tabId: string;
@@ -85,6 +85,7 @@ export function useMqttLeader(): boolean {
 
   useEffect(() => {
     let cancelled = false;
+    const currentTabId = tabIdRef.current;
 
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
@@ -112,6 +113,14 @@ export function useMqttLeader(): boolean {
       }
     };
 
+    const handlePageHide = () => {
+      if (!isLeader) return;
+      const record = readLeaderRecord();
+      if (record?.tabId === tabIdRef.current) {
+        removeLeaderRecord();
+      }
+    };
+
     tryAcquire();
 
     const interval = window.setInterval(() => {
@@ -129,6 +138,7 @@ export function useMqttLeader(): boolean {
     window.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("storage", handleStorage);
     window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handlePageHide);
 
     return () => {
       cancelled = true;
@@ -136,9 +146,10 @@ export function useMqttLeader(): boolean {
       window.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("storage", handleStorage);
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("pagehide", handlePageHide);
       if (isLeader) {
         const record = readLeaderRecord();
-        if (record?.tabId === tabIdRef.current) {
+        if (record?.tabId === currentTabId) {
           removeLeaderRecord();
         }
       }

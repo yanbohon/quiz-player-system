@@ -31,6 +31,7 @@ export interface FusionEventSummary {
   name: string;
   type: string;
   index: number;
+  posterUrl?: string;
 }
 
 export interface DatasheetRecord {
@@ -166,7 +167,7 @@ export async function fetchGrabbedQuestion(
   let data: GrabQuestionResponse | undefined;
   try {
     data = await response.json();
-  } catch (error) {
+  } catch {
     data = undefined;
   }
 
@@ -215,7 +216,7 @@ export async function submitGrabbedAnswer(params: {
   let data: SubmitGrabAnswerResponse | undefined;
   try {
     data = await response.json();
-  } catch (error) {
+  } catch {
     data = undefined;
   }
 

@@ -33,9 +33,23 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   allowedDevOrigins: resolveAllowedDevOrigins(),
 
+  // 设置与云托管一致的触发路径（从环境变量读取，默认为空）
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',
+
   // 优化配置
   compress: true,
   poweredByHeader: false,
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cdn.ohvfx.com",
+      },
+    ],
+  },
+
+  // 启用 standalone 输出模式（用于容器部署）
+  output: "standalone",
 
   // Webpack 配置（用于 MQTT.js）
   webpack: (config, { isServer }) => {

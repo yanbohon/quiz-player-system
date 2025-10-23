@@ -2,7 +2,11 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, #f6f9ff 0%, #ffffff 100%);
+  background: linear-gradient(
+    180deg,
+    rgba(22, 93, 255, 0.05) 0%,
+    #ffffff 100%
+  );
 }
 
 .fallback {
@@ -26,73 +30,196 @@
   border-radius: 12px;
 }
 
-.card {
+.ticket {
   width: 100%;
   max-width: 520px;
   background: #ffffff;
-  border-radius: 20px;
-  padding: 28px 24px 32px;
-  box-shadow: 0 20px 46px rgba(15, 23, 42, 0.14);
+  border-radius: 24px;
+  border: 1px solid var(--color-neutral-3, #e5e6eb);
+  box-shadow: 0 18px 40px rgba(22, 93, 255, 0.08);
   display: flex;
   flex-direction: column;
+  overflow: visible;
+}
+
+.posterSection {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 24px 24px 0 0;
+  overflow: hidden;
+  background: var(--color-fill-2, #f5f7ff);
+}
+
+.posterImageWrapper {
+  position: absolute;
+  inset: 0;
+}
+
+.posterImage {
+  object-fit: cover;
+}
+
+.posterPlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--color-neutral-4, #d7dbe7);
+  background: linear-gradient(
+    135deg,
+    rgba(22, 93, 255, 0.08),
+    rgba(22, 93, 255, 0.02)
+  );
+}
+
+.posterIcon {
+  width: 52px;
+  height: 52px;
+  color: var(--color-neutral-6, #86909c);
+}
+
+.ticketContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px 24px 28px;
+}
+
+.identityRow {
+  display: flex;
   align-items: center;
   gap: 16px;
 }
 
 .avatar {
-  width: 72px;
-  height: 72px;
-  border-radius: 36px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
   background: linear-gradient(140deg, #165dff 0%, #458fff 100%);
   color: #ffffff;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   text-transform: uppercase;
+  box-shadow: 0 10px 20px rgba(22, 93, 255, 0.28);
 }
 
-.info {
-  text-align: center;
+.identityInfo {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .name {
   margin: 0;
   font-size: 20px;
   font-weight: 700;
-  color: #1f2937;
+  color: var(--color-text-1, #1d2129);
 }
 
-.team {
+.identityMeta {
   font-size: 14px;
-  color: #2563eb;
+  color: var(--color-text-3, #86909c);
 }
 
-.statusList {
-  width: 100%;
-  border-radius: 16px;
-  overflow: hidden;
-  background: rgba(249, 250, 251, 0.7);
+.eventName {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-2, #4e5969);
 }
 
-.loading {
+.infoGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.ticketField {
+  flex: 1 1 calc(50% - 12px);
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--color-neutral-3, #e5e6eb);
+  background: var(--color-fill-1, #f7f8fa);
+}
+
+.ticketFieldFull {
+  flex-basis: 100%;
+}
+
+.fieldLabel {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-3, #86909c);
+}
+
+.fieldValue {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-1, #1d2129);
+  word-break: break-word;
+}
+
+.ticketDivider {
+  position: relative;
+  border-bottom: 1px dashed var(--color-neutral-4, #d7dbe7);
+  margin: 4px -24px;
+}
+
+.ticketDivider::before,
+.ticketDivider::after {
+  content: "";
+  position: absolute;
+  top: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(
+    180deg,
+    rgba(22, 93, 255, 0.05) 0%,
+    #ffffff 100%
+  );
+}
+
+.ticketDivider::before {
+  left: -12px;
+}
+
+.ticketDivider::after {
+  right: -12px;
+}
+
+.waitingArea {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  padding-top: 4px;
 }
 
-.loadingText {
+.waitingText {
   margin: 0;
   font-size: 14px;
-  color: #6b7280;
+  color: var(--color-text-3, #86909c);
 }
 
+.statusOnline {
+  color: var(--color-success-6, #00b42a);
+  font-weight: 600;
+}
+
+.statusOffline {
+  color: var(--color-danger-6, #f53f3f);
+  font-weight: 600;
+}
 
 .logoutButton {
   display: flex;
@@ -118,13 +245,17 @@
 }
 
 @media (max-width: 480px) {
-  .card {
-    padding: 24px 20px 28px;
+  .ticketContent {
+    padding: 20px 20px 24px;
   }
 
   .avatar {
-    width: 64px;
-    height: 64px;
-    font-size: 26px;
+    width: 58px;
+    height: 58px;
+    font-size: 24px;
+  }
+
+  .ticketField {
+    flex-basis: 100%;
   }
 }

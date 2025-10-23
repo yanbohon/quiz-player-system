@@ -576,19 +576,36 @@ export const useQuizStore = create<QuizState>()(
 
       try {
         const stageRecords = await fetchDatasheetRecords(event.id);
-        const stages = stageRecords
+        const posterRecord = stageRecords.find((record) => {
+          const name = record.fields?.["环节名称"];
+          return typeof name === "string" && name.trim() === "赛事海报";
+        });
+        const posterUrlValue = posterRecord?.fields?.URL;
+        const posterUrl =
+          typeof posterUrlValue === "string" && posterUrlValue.trim().length > 0
+            ? posterUrlValue.trim()
+            : undefined;
+
+        const stageRecordsForConfig = stageRecords.filter((record) => {
+          const name = record.fields?.["环节名称"];
+          return !(typeof name === "string" && name.trim() === "赛事海报");
+        });
+
+        const stages = stageRecordsForConfig
           .map((record, index) => toStageConfig(record, index))
           .filter((item): item is StageConfig => Boolean(item));
 
         set((draft) => {
-          draft.selectedEvent = event;
+          const nextEvent = { ...event, posterUrl };
+          draft.selectedEvent = nextEvent;
+          draft.events[ordinal] = nextEvent;
           draft.stages = stages;
-        draft.currentStage = undefined;
-        draft.teamProfile = undefined;
-        draft.teamProfiles = {};
-        draft.teamDirectorySheetId = undefined;
-        draft.scoreRecord = undefined;
-        draft.waitingForStageStart = false;
+          draft.currentStage = undefined;
+          draft.teamProfile = undefined;
+          draft.teamProfiles = {};
+          draft.teamDirectorySheetId = undefined;
+          draft.scoreRecord = undefined;
+          draft.waitingForStageStart = false;
           draft.isLoading = false;
         });
 

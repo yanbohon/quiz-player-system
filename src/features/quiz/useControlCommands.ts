@@ -10,12 +10,13 @@ import { MQTT_CONFIG, MQTT_TOPICS } from "@/config/control";
 import { Toast } from "@/lib/arco";
 import { ApiError } from "@/lib/api/client";
 import { useMqtt } from "@/lib/mqtt/hooks";
+import { mqttService } from "@/lib/mqtt/client";
 import type { MqttConfig } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
 
 const HEARTBEAT_INTERVAL = 45_000;
-const WILL_DELAY_SECONDS = 30;
+const WILL_DELAY_SECONDS = 0;
 
 type QuizStage = ReturnType<typeof useQuizStore.getState>["currentStage"];
 type StageRawFields = NonNullable<QuizStage>["rawFields"];
@@ -180,6 +181,7 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
     logCommand,
     currentStage,
     waitingForStageStart,
+    setWaitingForStageStart,
     setCurrentQuestionIndex,
     reset: resetQuizStore,
   } = useQuizStore(
@@ -192,6 +194,7 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       logCommand: state.logCommand,
       currentStage: state.currentStage,
       waitingForStageStart: state.waitingForStageStart,
+      setWaitingForStageStart: state.setWaitingForStageStart,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
       reset: state.reset,
     }))
@@ -219,7 +222,7 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       url: MQTT_CONFIG.url,
       clientId,
       clean: false,
-      keepalive: 5,
+      keepalive: 1,
       connectTimeout: 5 * 1000,
       reconnectPeriod: 1000,
       will: {
@@ -227,21 +230,19 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
         payload: "offline",
         qos: 0,
         retain: true,
-        properties: {
-          willDelayInterval: WILL_DELAY_SECONDS,
-        },
+        properties:
+          WILL_DELAY_SECONDS > 0
+            ? {
+                willDelayInterval: WILL_DELAY_SECONDS,
+              }
+            : undefined,
       },
     };
   }, [clientId, enabled, stateTopic]);
-  const { isConnected, error, subscribe, publish } = useMqtt(mqttConfig);
-
-  const publishRef = useRef(publish);
-  useEffect(() => {
-    publishRef.current = publish;
-  }, [publish]);
+  const { isConnected, error, subscribe } = useMqtt(mqttConfig);
 
   const hasAnnouncedOnlineRef = useRef(false);
-  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cleanupPendingRef = useRef(false);
 
   // Log MQTT connection status
@@ -273,15 +274,18 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
   const publishPresence = useCallback(
     (status: "online" | "offline") => {
       if (!stateTopic || !clientId) return;
-      const publishFn = publishRef.current;
-      if (!publishFn) return;
-      try {
-        publishFn(stateTopic, status, { qos: 0, retain: true });
-        if (status === "online") {
-          hasAnnouncedOnlineRef.current = true;
+      if (!mqttService.isConnected()) {
+        if (status === "offline") {
+          hasAnnouncedOnlineRef.current = false;
         }
+        return;
+      }
+      try {
+        mqttService.publish(stateTopic, status, { qos: 0, retain: true });
+        hasAnnouncedOnlineRef.current = status === "online";
       } catch (err) {
-        console.warn("Failed to publish presence payload:", err);
+        const error = err instanceof Error ? err : new Error(String(err));
+        console.warn(`Failed to publish ${status} presence payload:`, error);
       }
     },
     [clientId, stateTopic]
@@ -390,12 +394,13 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       }
 
       if (
-        command.toLowerCase() === "start" &&
+        command.toLowerCase() === "pool-start" &&
         currentStage?.kind === "grab" &&
         waitingForStageStart &&
         userId
       ) {
         try {
+          setWaitingForStageStart(false);
           await grabNextQuestion(userId);
         } catch (err) {
           if (
@@ -426,6 +431,7 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       logCommand,
       selectEventByOrdinal,
       setCurrentQuestionIndex,
+      setWaitingForStageStart,
       pathname,
       router,
       currentModeParam,
