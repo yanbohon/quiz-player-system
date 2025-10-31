@@ -10,6 +10,7 @@ import {
   fetchGrabbedQuestion,
   fetchNormalizedDatasheetQuestions,
   patchDatasheetRecords,
+  QuestionPoolEmptyError,
 } from "@/lib/fusionClient";
 import { NormalizedQuestion } from "@/lib/normalizeQuestion";
 
@@ -50,23 +51,49 @@ function resolveStageKind(name?: string): StageKind {
     case "一站到底":
     case "争分夺秒":
     case "终极挑战":
+    case "同分加题":
       return "standard";
     default:
+      if (typeof name === "string") {
+        const trimmed = name.trim();
+        if (!trimmed) {
+          return "unknown";
+        }
+        if (/^有问必答/u.test(trimmed)) {
+          return "standard";
+        }
+        if (/^争分夺秒/u.test(trimmed)) {
+          return "standard";
+        }
+        if (/^一站到底/u.test(trimmed)) {
+          return "standard";
+        }
+      }
       return "unknown";
   }
 }
 
-interface StageConfig {
+export interface StageConfig {
   order: number;
   stageId: string;
   recordId: string;
   name: string;
+  displayName: string;
   questionSheetId?: string;
   scoreSheetId?: string;
   generalSheetId?: string;
   kind: StageKind;
   rawFields: Record<string, unknown>;
 }
+
+interface RankEntry {
+  id: string;
+  schoolName: string;
+  score: number;
+}
+
+type WaitingTicketView = "default" | "rank";
+type RankStatus = "idle" | "loading" | "success" | "error";
 
 interface TeamProfile {
   recordId: string;
@@ -118,6 +145,10 @@ interface QuizState {
   // Command log
   commandLog: string[];
   waitingForStageStart: boolean;
+  waitingTicketView: WaitingTicketView;
+  rankStatus: RankStatus;
+  rankEntries: RankEntry[];
+  rankError?: string;
 
   // Derived getters
   currentQuestion: () => NormalizedQuestion | undefined;
@@ -139,6 +170,7 @@ interface QuizState {
   adjustHp: (delta: number) => void;
   logCommand: (command: string) => void;
   setWaitingForStageStart: (waiting: boolean) => void;
+  resetWaitingTicketView: () => void;
 
   // External interactions
   loadQuestions: (
@@ -146,6 +178,7 @@ interface QuizState {
     source: QuestionSource,
     options?: RequestInit
   ) => Promise<NormalizedQuestion[]>;
+  loadStageQuestionsFromFusion: () => Promise<NormalizedQuestion[]>;
   loadEvents: () => Promise<FusionEventSummary[]>;
   selectEventByOrdinal: (ordinal: number, userId?: string) => Promise<StageConfig[]>;
   activateStageById: (stageId: string, userId: string) => Promise<void>;
@@ -164,7 +197,7 @@ interface QuizState {
     recordId: string;
     questionId: string;
     answer: string;
-    time?: number;
+    time?: number | string;
     light?: "0" | "1";
     statusFieldKey?: string;
     status?: string;
@@ -176,24 +209,62 @@ interface QuizState {
     status: string;
   }) => Promise<void>;
   grabNextQuestion: (userId: string) => Promise<NormalizedQuestion | undefined>;
+  fetchWaitingRankings: () => Promise<void>;
+}
+
+const RANK_STAGE_NAME = "总分排名";
+export const RANK_STAGE_MISSING_ERROR = "rank-stage-missing";
+const RANK_ERROR_MESSAGE = "排行榜数据获取失败，请稍后再试";
+
+const STAGE_FIELD_STRING_KEYS = ["text", "value", "label", "name", "title"];
+
+function normalizeStageFieldText(source: unknown): string | undefined {
+  if (source === undefined || source === null) return undefined;
+  if (typeof source === "string") {
+    const trimmed = source.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof source === "number" && Number.isFinite(source)) {
+    return String(source);
+  }
+  if (Array.isArray(source)) {
+    for (const item of source) {
+      const normalized = normalizeStageFieldText(item);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  }
+  if (typeof source === "object") {
+    const record = source as Record<string, unknown>;
+    for (const key of STAGE_FIELD_STRING_KEYS) {
+      if (key in record) {
+        const normalized = normalizeStageFieldText(record[key]);
+        if (normalized) return normalized;
+      }
+    }
+  }
+  return undefined;
 }
 
 function toStageConfig(record: DatasheetRecord, order: number): StageConfig | null {
   if (!record.fields) return null;
   const fields = record.fields;
-  const stageId = String(fields.ID ?? order);
-  const name = String(fields["环节名称"] ?? `环节${order}`);
+  const stageId = normalizeStageFieldText(fields.ID) ?? String(order);
+  const name = normalizeStageFieldText(fields["环节名称"]) ?? `环节${order}`;
+  const displayName =
+    normalizeStageFieldText(fields["显示名称"]) ?? name;
+  const questionSheetId = normalizeStageFieldText(fields["题库表ID"]);
+  const scoreSheetId = normalizeStageFieldText(fields["分数表ID"]);
+  const generalSheetId = normalizeStageFieldText(fields["通用表ID"]);
   return {
     order,
     stageId,
     recordId: String(record.recordId ?? ""),
     name,
-    questionSheetId:
-      typeof fields["题库表ID"] === "string" ? fields["题库表ID"] : undefined,
-    scoreSheetId:
-      typeof fields["分数表ID"] === "string" ? fields["分数表ID"] : undefined,
-    generalSheetId:
-      typeof fields["通用表ID"] === "string" ? fields["通用表ID"] : undefined,
+    displayName,
+    questionSheetId: questionSheetId,
+    scoreSheetId: scoreSheetId,
+    generalSheetId: generalSheetId,
     kind: resolveStageKind(name),
     rawFields: { ...fields },
   };
@@ -324,6 +395,60 @@ function extractDisplayName(fields: Record<string, unknown>): string | undefined
   return undefined;
 }
 
+function extractFirstString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === "string") {
+        const trimmed = item.trim();
+        if (trimmed.length > 0) {
+          return trimmed;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function toRankEntry(record: DatasheetRecord): RankEntry | undefined {
+  const fields = record.fields ?? {};
+  const idRaw =
+    extractFirstString(fields.ID) ??
+    extractFirstString(fields["参赛编号"]) ??
+    (typeof record.recordId === "string" ? record.recordId : undefined);
+  const schoolRaw =
+    extractFirstString(fields["学校名"]) ??
+    extractFirstString(fields["学校名称"]) ??
+    extractFirstString(fields["学校"]);
+  const scoreRaw =
+    fields.score ??
+    fields.Score ??
+    fields["总分"] ??
+    fields["totalScore"];
+
+  const scoreValue =
+    typeof scoreRaw === "number"
+      ? scoreRaw
+      : typeof scoreRaw === "string"
+      ? Number.parseFloat(scoreRaw)
+      : Number.NaN;
+
+  if (!schoolRaw || !Number.isFinite(scoreValue)) {
+    return undefined;
+  }
+
+  const trimmedName = schoolRaw.trim();
+
+  return {
+    id: idRaw ? String(idRaw) : trimmedName,
+    schoolName: trimmedName,
+    score: scoreValue,
+  };
+}
+
 export const useQuizStore = create<QuizState>()(
   immer((set, get) => ({
     questions: [],
@@ -352,6 +477,10 @@ export const useQuizStore = create<QuizState>()(
     },
     commandLog: [],
     waitingForStageStart: false,
+    waitingTicketView: "default",
+    rankStatus: "idle",
+    rankEntries: [],
+    rankError: undefined,
 
     currentQuestion: () => {
       const state = get();
@@ -492,6 +621,10 @@ export const useQuizStore = create<QuizState>()(
         state.questionLoadAttempts = 0;
         state.questionLoadError = undefined;
         state.questionGateOpened = true;
+        state.waitingTicketView = "default";
+        state.rankStatus = "idle";
+        state.rankEntries = [];
+        state.rankError = undefined;
       }),
 
     adjustHp: (delta) =>
@@ -518,6 +651,14 @@ export const useQuizStore = create<QuizState>()(
         state.waitingForStageStart = waiting;
       }),
 
+    resetWaitingTicketView: () =>
+      set((state) => {
+        state.waitingTicketView = "default";
+        state.rankStatus = "idle";
+        state.rankEntries = [];
+        state.rankError = undefined;
+      }),
+
     loadQuestions: async (endpoint, source, options) => {
       set((state) => {
         state.isLoading = true;
@@ -537,6 +678,54 @@ export const useQuizStore = create<QuizState>()(
             error instanceof Error ? error.message : "题目加载失败";
         });
         throw error;
+      }
+    },
+
+    loadStageQuestionsFromFusion: async () => {
+      const stage = get().currentStage;
+      const isStandardStage = stage?.kind === "standard";
+      if (!stage) {
+        const error = new Error("当前未激活任何环节，无法加载题目");
+        set((state) => {
+          state.isLoading = false;
+          state.error = error.message;
+        });
+        throw error;
+      }
+
+      if (!stage.questionSheetId) {
+        const error = new Error("当前环节未配置题库，无法加载题目");
+        set((state) => {
+          state.isLoading = false;
+          state.error = error.message;
+        });
+        throw error;
+      }
+
+      set((state) => {
+        state.isLoading = true;
+        state.error = undefined;
+      });
+
+      try {
+        const list = await fetchNormalizedDatasheetQuestions(stage.questionSheetId);
+        get().setQuestions(list);
+        set((state) => {
+          state.isLoading = false;
+          if (isStandardStage) {
+            state.waitingForStageStart = true;
+            state.questionGateOpened = false;
+          }
+        });
+        return list;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "题目加载失败";
+        set((state) => {
+          state.isLoading = false;
+          state.error = message;
+        });
+        throw error instanceof Error ? error : new Error(message);
       }
     },
 
@@ -850,6 +1039,8 @@ export const useQuizStore = create<QuizState>()(
       };
       if (typeof time === "number") {
         fields.time = time;
+      } else if (typeof time === "string") {
+        fields.time = time;
       }
       if (light === "0" || light === "1") {
         fields.light = light;
@@ -896,20 +1087,73 @@ export const useQuizStore = create<QuizState>()(
     },
 
     grabNextQuestion: async (userId) => {
-      const result = await fetchGrabbedQuestion(userId);
-      if (typeof result.remainingCount === "number") {
-        const remaining = result.remainingCount;
+      try {
+        const result = await fetchGrabbedQuestion(userId);
+        if (typeof result.remainingCount === "number") {
+          const remaining = result.remainingCount;
+          set((draft) => {
+            draft.oceanRemainingCount = Math.max(0, remaining);
+          });
+        }
+        if (result.question) {
+          get().pushQuestion(result.question);
+        }
+        return result.question;
+      } catch (error) {
+        if (error instanceof QuestionPoolEmptyError) {
+          set((draft) => {
+            draft.oceanRemainingCount = 0;
+          });
+        }
+        throw error;
+      }
+    },
+
+    fetchWaitingRankings: async () => {
+      const state = get();
+      const stage = state.stages.find((item) => {
+        if (!item?.name) return false;
+        return item.name.trim() === RANK_STAGE_NAME && !!item.generalSheetId;
+      });
+
+      if (!stage?.generalSheetId) {
+        console.warn("缺少总分排名通用表配置");
+        throw new Error(RANK_STAGE_MISSING_ERROR);
+      }
+
+      set((draft) => {
+        draft.waitingTicketView = "rank";
+        draft.rankStatus = "loading";
+        draft.rankError = undefined;
+        draft.rankEntries = [];
+      });
+
+      try {
+        const records = await fetchDatasheetRecords(stage.generalSheetId);
+        const entries = records
+          .map(toRankEntry)
+          .filter((entry): entry is RankEntry => Boolean(entry));
+
+        entries.sort((a, b) => {
+          if (b.score !== a.score) {
+            return b.score - a.score;
+          }
+          return a.schoolName.localeCompare(b.schoolName, "zh-Hans");
+        });
+
         set((draft) => {
-          draft.oceanRemainingCount = Math.max(
-            0,
-            remaining
-          );
+          draft.rankEntries = entries;
+          draft.rankStatus = "success";
+          draft.rankError = undefined;
+        });
+      } catch (error) {
+        console.error("获取排行榜数据失败", error);
+        set((draft) => {
+          draft.rankStatus = "error";
+          draft.rankError = RANK_ERROR_MESSAGE;
+          draft.rankEntries = [];
         });
       }
-      if (result.question) {
-        get().pushQuestion(result.question);
-      }
-      return result.question;
     },
   }))
 );

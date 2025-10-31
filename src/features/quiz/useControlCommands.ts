@@ -13,9 +13,12 @@ import { useMqtt } from "@/lib/mqtt/hooks";
 import { mqttService } from "@/lib/mqtt/client";
 import type { MqttConfig } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
-import { useQuizStore } from "@/store/quizStore";
+import { RANK_STAGE_MISSING_ERROR, useQuizStore } from "@/store/quizStore";
 
-const HEARTBEAT_INTERVAL = 45_000;
+const MQTT_KEEPALIVE_SECONDS = 45;
+const MQTT_RECONNECT_PERIOD_MS = 5_000;
+const MQTT_CONNECT_TIMEOUT_MS = 20_000;
+const HEARTBEAT_INTERVAL = Math.round((MQTT_KEEPALIVE_SECONDS * 1_000) / 2);
 const WILL_DELAY_SECONDS = 0;
 
 type QuizStage = ReturnType<typeof useQuizStore.getState>["currentStage"];
@@ -38,10 +41,29 @@ const MODE_ALIAS_MAP: Record<string, ContestModeId> = {
   "有问必答": "qa",
   问答: "qa",
   "问答赛": "qa",
+  "qa-20": "qa-20",
+  "有问必答(20)": "qa-20",
+  "有问必答（20）": "qa-20",
+  "qa-30": "qa-30",
+  "有问必答(30)": "qa-30",
+  "有问必答（30）": "qa-30",
+  "qa-50": "qa-50",
+  "有问必答(50)": "qa-50",
+  "有问必答（50）": "qa-50",
   "last-stand": "last-stand",
   laststand: "last-stand",
   "一站到底": "last-stand",
   "1v1": "last-stand",
+  "last-stand-group": "last-stand-group",
+  laststandgroup: "last-stand-group",
+  "一站到底(分组)": "last-stand-group",
+  "一站到底（分组）": "last-stand-group",
+  "一站到底(初中组)": "last-stand-group",
+  "一站到底(中职组)": "last-stand-group",
+  "一站到底(高中组)": "last-stand-group",
+  "一站到底（初中组）": "last-stand-group",
+  "一站到底（中职组）": "last-stand-group",
+  "一站到底（高中组）": "last-stand-group",
   "speed-run": "speed-run",
   speedrun: "speed-run",
   "争分夺秒": "speed-run",
@@ -54,7 +76,22 @@ const MODE_ALIAS_MAP: Record<string, ContestModeId> = {
   "ultimate-challenge": "ultimate-challenge",
   ultimate: "ultimate-challenge",
   "终极挑战": "ultimate-challenge",
+  "同分加题": "ultimate-challenge",
+  "同分加題": "ultimate-challenge",
 };
+
+const LAST_STAND_GROUP_PATTERN = /^一站到底\s*[\(（].*组[\)）]\s*$/u;
+
+const MODE_ALIAS_PATTERNS: Array<{ regex: RegExp; mode: ContestModeId }> = [
+  {
+    regex: /^争分夺秒.*$/u,
+    mode: "speed-run",
+  },
+  {
+    regex: LAST_STAND_GROUP_PATTERN,
+    mode: "last-stand-group",
+  },
+];
 
 const MODE_IDS = new Set(Object.keys(CONTEST_MODES));
 
@@ -78,6 +115,12 @@ function resolveModeAlias(candidate: unknown): ContestModeId | undefined {
   const compact = lower.replace(/\s+/g, "");
   const compactMatch = MODE_ALIAS_MAP[compact];
   if (compactMatch) return compactMatch;
+
+  for (const { regex, mode } of MODE_ALIAS_PATTERNS) {
+    if (regex.test(trimmed)) {
+      return mode;
+    }
+  }
 
   return MODE_ALIAS_MAP[lower];
 }
@@ -106,29 +149,44 @@ export function resolveModeForStage(stage: QuizStage): ContestModeId | undefined
   const rawMode = resolveModeFromRaw(stage.rawFields);
   if (rawMode) return rawMode;
 
-  const aliasFromName = resolveModeAlias(stage.name);
-  if (aliasFromName) return aliasFromName;
+  const displayName = stage.displayName?.trim();
+  const stageName = stage.name?.trim();
+  const nameCandidates = [
+    ...(stageName ? [stageName] : []),
+    ...(displayName && displayName !== stageName ? [displayName] : []),
+  ];
 
-  const name = stage.name?.trim().toLowerCase() ?? "";
-  if (!name) {
+  for (const candidate of nameCandidates) {
+    const alias = resolveModeAlias(candidate);
+    if (alias) return alias;
+  }
+
+  for (const candidate of nameCandidates) {
+    if (candidate && LAST_STAND_GROUP_PATTERN.test(candidate)) {
+      return "last-stand-group";
+    }
+  }
+
+  for (const candidate of nameCandidates) {
+    if (!candidate) continue;
+    const lower = candidate.toLowerCase();
+    if (lower.includes("题海")) {
+      return "ocean-adventure";
+    }
+    if (lower.includes("终极") || lower.includes("同分")) {
+      return "ultimate-challenge";
+    }
+    if (lower.includes("争分") || lower.includes("速答") || lower.includes("冲刺")) {
+      return "speed-run";
+    }
+    if (lower.includes("一站")) {
+      return "last-stand";
+    }
+  }
+
+  if (nameCandidates.length === 0) {
     if (stage.kind === "grab") return "ocean-adventure";
     return undefined;
-  }
-
-  if (name.includes("题海")) {
-    return "ocean-adventure";
-  }
-
-  if (name.includes("终极")) {
-    return "ultimate-challenge";
-  }
-
-  if (name.includes("争分") || name.includes("速答") || name.includes("冲刺")) {
-    return "speed-run";
-  }
-
-  if (name.includes("一站")) {
-    return "last-stand";
   }
 
   if (stage.kind === "grab") {
@@ -181,9 +239,10 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
     logCommand,
     currentStage,
     waitingForStageStart,
-    setWaitingForStageStart,
     setCurrentQuestionIndex,
     reset: resetQuizStore,
+    fetchWaitingRankings,
+    resetWaitingTicketView,
   } = useQuizStore(
     useShallow((state) => ({
       events: state.events,
@@ -194,9 +253,10 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       logCommand: state.logCommand,
       currentStage: state.currentStage,
       waitingForStageStart: state.waitingForStageStart,
-      setWaitingForStageStart: state.setWaitingForStageStart,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
       reset: state.reset,
+      fetchWaitingRankings: state.fetchWaitingRankings,
+      resetWaitingTicketView: state.resetWaitingTicketView,
     }))
   );
 
@@ -222,9 +282,9 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       url: MQTT_CONFIG.url,
       clientId,
       clean: false,
-      keepalive: 1,
-      connectTimeout: 5 * 1000,
-      reconnectPeriod: 1000,
+      keepalive: MQTT_KEEPALIVE_SECONDS,
+      connectTimeout: MQTT_CONNECT_TIMEOUT_MS,
+      reconnectPeriod: MQTT_RECONNECT_PERIOD_MS,
       will: {
         topic: stateTopic,
         payload: "offline",
@@ -338,21 +398,39 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       if (command.toLowerCase() === "refresh") {
         const appStore = useAppStore.getState();
         resetQuizStore();
-        appStore.logout();
         appStore.setMqttConnected(false);
         Toast.success("选手端已重置");
-        if (pathname !== "/waiting") {
-          router.push("/waiting");
+        if (typeof window !== "undefined") {
+          window.location.replace("/waiting");
         } else {
-          router.refresh();
+          router.push("/waiting");
         }
         return;
       }
 
       if (command.toLowerCase() === "home") {
+        resetWaitingTicketView();
         if (pathname !== "/waiting") {
           router.push("/waiting");
         }
+        return;
+      }
+
+      if (command.toLowerCase() === "rank") {
+        fetchWaitingRankings()
+          .then(() => {
+            if (pathname !== "/waiting") {
+              router.push("/waiting");
+            }
+          })
+          .catch((err) => {
+            if (err instanceof Error && err.message === RANK_STAGE_MISSING_ERROR) {
+              Toast.warn("未加载赛事");
+              return;
+            }
+            console.error("排行榜指令处理失败", err);
+            Toast.error("排行榜数据获取失败");
+          });
         return;
       }
 
@@ -400,7 +478,6 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
         userId
       ) {
         try {
-          setWaitingForStageStart(false);
           await grabNextQuestion(userId);
         } catch (err) {
           if (
@@ -431,13 +508,14 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       logCommand,
       selectEventByOrdinal,
       setCurrentQuestionIndex,
-      setWaitingForStageStart,
       pathname,
       router,
       currentModeParam,
       resetQuizStore,
       userId,
       waitingForStageStart,
+      fetchWaitingRankings,
+      resetWaitingTicketView,
     ]
   );
 

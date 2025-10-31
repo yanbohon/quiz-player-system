@@ -1,12 +1,15 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  TouchEvent as ReactTouchEvent,
+} from "react";
 import {
   Button,
-  Checkbox,
   NavBar,
   Progress,
-  Radio,
   Tag,
 } from "@arco-design/mobile-react";
 import Image from "next/image";
@@ -14,18 +17,22 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
 import { Toast, Notify } from "@/lib/arco";
+import { QuizApiError } from "@/lib/fusionClient";
+import { ensureQuizApiError, showQuizApiErrorToast } from "@/lib/quizApiError";
 import { mqttService } from "@/lib/mqtt/client";
 import { useMqttSubscription } from "@/lib/mqtt/hooks";
 import { MQTT_TOPICS } from "@/config/control";
+import { resolveTihaiUrl } from "@/config/api";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
 import { useQuizRuntime } from "@/features/quiz/useQuizRuntime";
-import { CONTEST_MODES, DEFAULT_MODE } from "@/features/quiz/modes";
+import { CONTEST_MODES, DEFAULT_MODE, isQaVariantMode } from "@/features/quiz/modes";
 import {
   ContestModeId,
   CustomOceanQuestion,
   MatchingOption,
   QuizQuestion,
+  QuizSubmissionResult,
   StandardQuestion,
   StandardQuestionOption,
   StandardQuestionType,
@@ -37,13 +44,78 @@ import {
   FillDrawingBoardEmptyError,
 } from "@/features/quiz/components/FillDrawingBoard";
 import type { SmoothSerializedStroke } from "@/features/quiz/components/SmoothDrawingCanvas";
-import { resolveStatusFieldKey } from "@/features/quiz/status";
+import { resolveStatusFieldKey, resolveLastStandGroupStatusIndicator } from "@/features/quiz/status";
 import trashIcon from "@/components/icons/trash.svg";
 import styles from "./page.module.css";
 
 const DEFAULT_NOTIFY_OFFSET = 68;
 const FILL_SKETCH_CACHE_LIMIT = 10;
 const FILL_PREVIEW_STORAGE_KEY = "quiz-fill-preview-cache";
+const SUBMIT_THROTTLE_INTERVAL_MS = 1000;
+const SUBMIT_FREQUENT_TOAST_DURATION_MS = 500;
+const SUBMISSION_TIMEOUT_MS = 2000;
+const PERSISTENCE_TIMEOUT_MS = 2000;
+
+type PersistenceJob = {
+  id: string;
+  label: string;
+  execute: () => Promise<void>;
+  createdAt: number;
+  attempts: number;
+  lastErrorMessage?: string;
+};
+
+type PersistenceJobSnapshot = {
+  id: string;
+  label: string;
+  createdAt: number;
+  attempts: number;
+  lastErrorMessage?: string;
+};
+
+type PersistenceQueueSnapshot = {
+  pending: number;
+  failed: number;
+  failedItems: PersistenceJobSnapshot[];
+};
+
+function createRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorFactory: () => QuizApiError
+): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        reject(errorFactory());
+      }
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
 
 function formatSeconds(seconds?: number) {
   if (seconds === undefined) return "--:--";
@@ -83,15 +155,33 @@ function formatAnswerForQuestionSheet(
     return "填空";
   }
 
-  if (question.type === "wordbank") {
-    if (!Array.isArray(selection)) {
+  if (question.type === "wordbank" || question.type === "point-select") {
+    const selections = parseWordbankSelectionInput(selection);
+    if (selections.length === 0) {
       return "未选";
+    }
+    const canonicalValues = selections.map((item) =>
+      canonicalizeWordbankValue(item, question.options)
+    );
+    const hasValue = canonicalValues.some((item) => item);
+    if (!hasValue) {
+      return "未选";
+    }
+    if (canonicalValues.every((item) => item.length === 1)) {
+      return canonicalValues.join("");
+    }
+    const letterTokens = canonicalValues
+      .map((value) => resolveOptionLetter(question, value))
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean);
+    if (letterTokens.length > 0 && letterTokens.every((token) => token.length === 1)) {
+      return letterTokens.join("");
     }
     const labelMap = new Map(
       question.options.map((option) => [option.value, option.label])
     );
-    const labels = selection
-      .map((item) => (item ? labelMap.get(String(item)) ?? String(item) : ""))
+    const labels = canonicalValues
+      .map((item) => (item ? labelMap.get(item) ?? item : ""))
       .filter(Boolean);
     return labels.length > 0 ? labels.join("/") : "未选";
   }
@@ -171,6 +261,32 @@ function formatStandardQuestionAnswer(question: StandardQuestion): string | null
     return null;
   }
 
+  if (question.type === "wordbank" || question.type === "point-select") {
+    const values = parseWordbankSelectionInput(
+      raw as string | string[] | null | undefined
+    );
+    if (values.length === 0) {
+      return null;
+    }
+    const canonicalValues = values.map((value) =>
+      canonicalizeWordbankValue(value, question.options)
+    );
+    const hasValue = canonicalValues.some((item) => item);
+    if (!hasValue) {
+      return null;
+    }
+    if (canonicalValues.every((item) => item.length === 1)) {
+      return canonicalValues.join("");
+    }
+    const labelMap = new Map(
+      question.options.map((option) => [option.value, option.label])
+    );
+    const labels = canonicalValues
+      .map((value) => (value ? labelMap.get(value) ?? value : ""))
+      .filter((value) => value && value.trim().length > 0);
+    return labels.length ? labels.join(" / ") : null;
+  }
+
   const values = (Array.isArray(raw) ? raw : [raw])
     .map((value) => (value == null ? "" : String(value).trim()))
     .filter(Boolean);
@@ -180,39 +296,28 @@ function formatStandardQuestionAnswer(question: StandardQuestion): string | null
   }
 
   if (question.type === "matching") {
+    const leftItems = question.matching?.left ?? [];
+    const rightItems = question.matching?.right ?? [];
     const segments = values
       .map((pair) => {
+        if (!pair.includes(":")) {
+          return pair;
+        }
         const [leftRaw, rightRaw] = pair.split(":");
         const leftId = leftRaw?.trim();
         const rightId = rightRaw?.trim();
-        if (!leftId && !rightId) {
+        if (!leftId || !rightId) {
           return pair;
         }
-        const leftLabel =
-          leftId && question.matching?.left
-            ? question.matching.left.find((item) => item.id === leftId)?.label ?? leftId
-            : leftId ?? "";
-        const rightLabel =
-          rightId && question.matching?.right
-            ? question.matching.right.find((item) => item.id === rightId)?.label ?? rightId
-            : rightId ?? "";
-        if (leftLabel && rightLabel) {
-          return `${leftLabel}→${rightLabel}`;
-        }
-        if (leftLabel) return leftLabel;
-        if (rightLabel) return rightLabel;
-        return pair;
+        const leftIndex = leftItems.findIndex((item) => item.id === leftId);
+        const rightIndex = rightItems.findIndex((item) => item.id === rightId);
+        const leftLabel = leftIndex >= 0 ? String(leftIndex + 1) : leftId;
+        const rightLetter =
+          rightIndex >= 0 ? String.fromCharCode(65 + rightIndex) : rightId.toUpperCase();
+        return `${leftLabel}-${rightLetter}`;
       })
       .filter(Boolean);
-    return segments.length ? segments.join("，") : null;
-  }
-
-  if (question.type === "wordbank") {
-    const labelMap = new Map(question.options.map((option) => [option.value, option.label]));
-    const labels = values
-      .map((value) => labelMap.get(value) ?? value)
-      .filter((value) => value && value.trim().length > 0);
-    return labels.length ? labels.join(" / ") : null;
+    return segments.length ? segments.join("|") : null;
   }
 
   if (question.type === "fill") {
@@ -433,6 +538,8 @@ function resolveStandardTypeLabel(type: StandardQuestionType): string {
     case "boolean":
       return "判断题";
     case "wordbank":
+      return "选词填空";
+    case "point-select":
       return "点选题";
     case "matching":
       return "连线题";
@@ -630,6 +737,193 @@ function ErrorBadgeIcon({ className }: { className?: string }) {
   );
 }
 
+interface OptionCardButtonProps {
+  value: string;
+  label: string;
+  description?: string | null;
+  badge: string;
+  active: boolean;
+  disabled?: boolean;
+  onSelect: (value: string) => void;
+  role?: "radio" | "checkbox";
+}
+
+function OptionCardButton({
+  value,
+  label,
+  description,
+  badge,
+  active,
+  disabled = false,
+  onSelect,
+  role,
+}: OptionCardButtonProps) {
+  const [isPressed, setPressed] = useState(false);
+  const skipClickRef = useRef(false);
+  const releaseTimerRef = useRef<number | null>(null);
+  const skipResetTimerRef = useRef<number | null>(null);
+
+  const clearPressTimer = useCallback(() => {
+    if (releaseTimerRef.current !== null) {
+      window.clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
+  }, []);
+
+  const clearSkipResetTimer = useCallback(() => {
+    if (skipResetTimerRef.current !== null) {
+      window.clearTimeout(skipResetTimerRef.current);
+      skipResetTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleSkipReset = useCallback(() => {
+    clearSkipResetTimer();
+    skipResetTimerRef.current = window.setTimeout(() => {
+      skipClickRef.current = false;
+      skipResetTimerRef.current = null;
+    }, 150);
+  }, [clearSkipResetTimer]);
+
+  const triggerSelection = useCallback(() => {
+    onSelect(value);
+  }, [onSelect, value]);
+
+  const releasePressState = useCallback(() => {
+    clearPressTimer();
+    setPressed(false);
+  }, [clearPressTimer]);
+
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (disabled) return;
+      try {
+        event.currentTarget.focus({ preventScroll: true });
+      } catch {
+        event.currentTarget.focus();
+      }
+      const isTouchLike = event.pointerType === "touch" || event.pointerType === "pen";
+      if (isTouchLike) {
+        skipClickRef.current = true;
+      } else {
+        skipClickRef.current = false;
+      }
+      clearSkipResetTimer();
+      setPressed(true);
+      if (isTouchLike) {
+        triggerSelection();
+      }
+    },
+    [clearSkipResetTimer, disabled, triggerSelection]
+  );
+
+  const handlePointerUp = useCallback(() => {
+    releasePressState();
+    if (skipClickRef.current) {
+      scheduleSkipReset();
+    }
+  }, [releasePressState, scheduleSkipReset]);
+
+  const handlePointerLeave = useCallback(() => {
+    releasePressState();
+    if (skipClickRef.current) {
+      scheduleSkipReset();
+    }
+  }, [releasePressState, scheduleSkipReset]);
+
+  const handleTouchStart = useCallback(
+    (_event: ReactTouchEvent<HTMLButtonElement>) => {
+      if (disabled) return;
+      if (skipClickRef.current) {
+        // Pointer events already handled this touch.
+        return;
+      }
+      skipClickRef.current = true;
+      clearSkipResetTimer();
+      setPressed(true);
+      triggerSelection();
+    },
+    [clearSkipResetTimer, disabled, triggerSelection]
+  );
+
+  const handleTouchEnd = useCallback(() => {
+    releasePressState();
+    if (skipClickRef.current) {
+      scheduleSkipReset();
+    }
+  }, [releasePressState, scheduleSkipReset]);
+
+  const handleClick = useCallback((_event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (disabled) return;
+    if (skipClickRef.current) {
+      skipClickRef.current = false;
+      clearSkipResetTimer();
+      releasePressState();
+      return;
+    }
+    setPressed(true);
+    triggerSelection();
+    clearPressTimer();
+    releaseTimerRef.current = window.setTimeout(() => {
+      releasePressState();
+    }, 120);
+    scheduleSkipReset();
+  }, [
+    clearPressTimer,
+    clearSkipResetTimer,
+    disabled,
+    releasePressState,
+    scheduleSkipReset,
+    triggerSelection,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      clearPressTimer();
+      clearSkipResetTimer();
+    };
+  }, [clearPressTimer, clearSkipResetTimer]);
+
+  const className = [
+    styles.optionCard,
+    active ? styles.optionCardActive : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const ariaChecked = role ? active : undefined;
+
+  return (
+    <button
+      type="button"
+      role={role}
+      aria-checked={ariaChecked}
+      className={className}
+      data-active={active ? "true" : undefined}
+      data-pressed={isPressed ? "true" : undefined}
+      disabled={disabled}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
+      onPointerCancel={handlePointerLeave}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      onClick={handleClick}
+    >
+      <span
+        className={`${styles.optionBadge} ${active ? styles.optionBadgeActive : ""}`}
+      >
+        {badge}
+      </span>
+      <div className={styles.optionContent}>
+        <span className={styles.optionLabel}>{label}</span>
+        {description ? <span className={styles.optionDesc}>{description}</span> : null}
+      </div>
+    </button>
+  );
+}
+
 interface WordbankToken {
   kind: "text" | "blank";
   content: string;
@@ -716,15 +1010,82 @@ function canonicalizeWordbankValue(
   return token;
 }
 
+function parseWordbankSelectionInput(
+  raw: string | string[] | null | undefined
+): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => (item == null ? "" : String(item).trim()))
+      .filter(Boolean);
+  }
+
+  if (typeof raw !== "string") {
+    return [];
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (
+    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}"))
+  ) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((item) => (item == null ? "" : String(item).trim()))
+          .filter(Boolean);
+      }
+      if (parsed && typeof parsed === "object") {
+        return Object.values(parsed as Record<string, unknown>)
+          .map((item) => (item == null ? "" : String(item).trim()))
+          .filter(Boolean);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+
+  const separatorSegments = trimmed
+    .split(/[,，;；\/\\|]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (separatorSegments.length > 1) {
+    return separatorSegments;
+  }
+
+  if (trimmed.includes(" ")) {
+    const whitespaceSegments = trimmed
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (whitespaceSegments.length > 1) {
+      return whitespaceSegments;
+    }
+  }
+
+  if (/^[A-Za-z]+$/.test(trimmed)) {
+    return trimmed.split("");
+  }
+
+  return [trimmed];
+}
+
 function canonicalizeWordbankSelections(
   raw: string | string[] | null | undefined,
   blanks: number,
   options: StandardQuestionOption[]
 ): string[] {
-  const base = asStringArray(raw);
-  const length = blanks > 0 ? blanks : base.length;
+  const parsed = parseWordbankSelectionInput(raw);
+  const length = blanks > 0 ? blanks : parsed.length;
+  if (length === 0) {
+    return parsed.map((value) => canonicalizeWordbankValue(value, options));
+  }
   return Array.from({ length }, (_, index) =>
-    canonicalizeWordbankValue(base[index], options)
+    canonicalizeWordbankValue(parsed[index], options)
   );
 }
 
@@ -751,6 +1112,9 @@ function QuizPageContent() {
   );
 
   const { state, controls, meta } = useQuizRuntime(mode);
+  const isQaMode = isQaVariantMode(meta.id);
+  const isLastStandMode = meta.id === "last-stand" || meta.id === "last-stand-group";
+  const isGroupedLastStand = meta.id === "last-stand-group";
   const delegateAnswerToControl = controls.delegateAnswerTo;
   const triggerBuzzerControl = controls.triggerBuzzer;
   const applyHostJudgementControl = controls.applyHostJudgement;
@@ -761,6 +1125,7 @@ function QuizPageContent() {
     scoreRecord,
     submitAnswerChoice,
     submitJudgeResult,
+    updateScoreStatus,
     normalizedQuestions,
     teamProfiles,
     ensureTeamProfile,
@@ -777,6 +1142,7 @@ function QuizPageContent() {
       scoreRecord: storeState.scoreRecord,
       submitAnswerChoice: storeState.submitAnswerChoice,
       submitJudgeResult: storeState.submitJudgeResult,
+      updateScoreStatus: storeState.updateScoreStatus,
       normalizedQuestions: storeState.questions,
       teamProfiles: storeState.teamProfiles,
       ensureTeamProfile: storeState.ensureTeamProfile,
@@ -805,7 +1171,7 @@ function QuizPageContent() {
     meta.id === "ultimate-challenge"
   );
   const shouldHandleSubmitCommand =
-    meta.id === "qa" || meta.id === "last-stand" || meta.id === "ultimate-challenge";
+    isQaMode || isLastStandMode || meta.id === "ultimate-challenge";
   const commandMessage = useMqttSubscription(
     MQTT_TOPICS.command,
     shouldHandleSubmitCommand
@@ -822,6 +1188,8 @@ function QuizPageContent() {
   const lastQuestionIdRef = useRef<string | null>(null);
   const lastSubmitCommandRef = useRef<number | null>(null);
   const lastCommandHandledRef = useRef<number | null>(null);
+  const statusInitRef = useRef<string | null>(null);
+  const retractHandlingRef = useRef(false);
   const [notifyOffset, setNotifyOffset] = useState(DEFAULT_NOTIFY_OFFSET);
   const [isCommandSubmissionLocked, setCommandSubmissionLocked] = useState(false);
   const [wordbankActiveIndex, setWordbankActiveIndex] = useState<number | null>(null);
@@ -853,6 +1221,121 @@ function QuizPageContent() {
     null
   );
   const [lockedWinnerId, setLockedWinnerId] = useState<string | null>(null);
+  const lastManualSubmitAtRef = useRef<number>(0);
+  const submissionQueueTailRef = useRef<Promise<void>>(Promise.resolve());
+  const activeSubmissionIdRef = useRef<string | null>(null);
+  const inflightSubmissionSetRef = useRef<Set<string>>(new Set());
+  const persistenceQueueRef = useRef<PersistenceJob[]>([]);
+  const persistenceActiveRef = useRef<PersistenceJob | null>(null);
+  const persistenceFailedRef = useRef<PersistenceJob[]>([]);
+  const [persistenceStats, setPersistenceStats] = useState<PersistenceQueueSnapshot>({
+    pending: 0,
+    failed: 0,
+    failedItems: [],
+  });
+  const [showPersistenceDetails, setShowPersistenceDetails] = useState(false);
+
+  const updatePersistenceSnapshot = useCallback(() => {
+    const active = persistenceActiveRef.current ? 1 : 0;
+    setPersistenceStats({
+      pending: persistenceQueueRef.current.length + active,
+      failed: persistenceFailedRef.current.length,
+      failedItems: persistenceFailedRef.current.map((job) => ({
+        id: job.id,
+        label: job.label,
+        createdAt: job.createdAt,
+        attempts: job.attempts,
+        lastErrorMessage: job.lastErrorMessage,
+      })),
+    });
+  }, []);
+
+  const processPersistenceQueue = useCallback(() => {
+    if (persistenceActiveRef.current || persistenceQueueRef.current.length === 0) {
+      updatePersistenceSnapshot();
+      return;
+    }
+
+    const job = persistenceQueueRef.current.shift();
+    if (!job) {
+      updatePersistenceSnapshot();
+      return;
+    }
+
+    persistenceActiveRef.current = job;
+    updatePersistenceSnapshot();
+
+    const executeJob = async () => {
+      try {
+        await job.execute();
+        persistenceActiveRef.current = null;
+        updatePersistenceSnapshot();
+        processPersistenceQueue();
+      } catch (error) {
+        const normalized = ensureQuizApiError(error);
+        job.lastErrorMessage = `${normalized.message}${
+          normalized.suggestion ? `，${normalized.suggestion}` : ""
+        }`;
+        job.attempts += 1;
+        persistenceFailedRef.current.push(job);
+        persistenceActiveRef.current = null;
+        updatePersistenceSnapshot();
+        showQuizApiErrorToast(normalized, job.label);
+        processPersistenceQueue();
+      }
+    };
+
+    executeJob().catch((error) => {
+      console.error("同步任务执行失败", error);
+    });
+  }, [updatePersistenceSnapshot]);
+
+  const enqueuePersistenceJob = useCallback(
+    (job: PersistenceJob) => {
+      const existsInQueue = persistenceQueueRef.current.some((item) => item.id === job.id);
+      const existsAsActive = persistenceActiveRef.current?.id === job.id;
+      const existsInFailed = persistenceFailedRef.current.some((item) => item.id === job.id);
+      if (existsInQueue || existsAsActive || existsInFailed) {
+        // 避免重复排队，失败任务会通过 retry 接口重新进入队列
+        return;
+      }
+      persistenceQueueRef.current.push(job);
+      updatePersistenceSnapshot();
+      processPersistenceQueue();
+    },
+    [processPersistenceQueue, updatePersistenceSnapshot]
+  );
+
+  const handleRetryPersistenceFailures = useCallback(() => {
+    if (persistenceFailedRef.current.length === 0) {
+      Toast.info("暂无需要重试的任务", 800);
+      return;
+    }
+    const jobs = persistenceFailedRef.current.splice(0);
+    jobs.forEach((job) => {
+      job.lastErrorMessage = undefined;
+      persistenceQueueRef.current.push(job);
+    });
+    updatePersistenceSnapshot();
+    processPersistenceQueue();
+    Toast.success("失败任务已重新排队", 800);
+  }, [processPersistenceQueue, updatePersistenceSnapshot]);
+
+  const enqueueSubmission = useCallback(
+    (task: () => Promise<QuizSubmissionResult | undefined>) => {
+      const previous = submissionQueueTailRef.current;
+      const runTask = (async () => {
+        await previous;
+        return task();
+      })();
+      submissionQueueTailRef.current = runTask.then(
+        () => undefined,
+        () => undefined
+      );
+      return runTask;
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -898,10 +1381,76 @@ function QuizPageContent() {
     }
   }, [meta.id]);
 
+  useEffect(() => {
+    if (!isLastStandMode) return;
+    if (!currentStage || !scoreRecord) return;
+    const scoreSheetId = currentStage.scoreSheetId;
+    const recordId = scoreRecord.recordId;
+    if (!scoreSheetId || !recordId) return;
+
+    const statusFieldKey = resolveStatusFieldKey(scoreRecord.fields);
+    if (!statusFieldKey) return;
+
+    let statusValue: string | undefined;
+    if (isGroupedLastStand) {
+      statusValue = resolveLastStandGroupStatusIndicator(currentStage.name);
+    } else {
+      const initialHp = meta.features.initialHp ?? 0;
+      if (!Number.isFinite(initialHp) || initialHp <= 0) return;
+      statusValue = String(Math.max(0, Math.trunc(initialHp)));
+    }
+
+    if (!statusValue) return;
+
+    const cacheKey = `${recordId}:${statusValue}:${isGroupedLastStand ? "group" : "classic"}`;
+    if (statusInitRef.current === cacheKey) return;
+
+    const currentStatus = scoreRecord.fields?.[statusFieldKey];
+    if (
+      currentStatus !== undefined &&
+      currentStatus !== null &&
+      String(currentStatus) === statusValue
+    ) {
+      statusInitRef.current = cacheKey;
+      return;
+    }
+
+    let cancelled = false;
+    updateScoreStatus({
+      datasheetId: scoreSheetId,
+      recordId,
+      fieldKey: statusFieldKey,
+      status: statusValue,
+    })
+      .then(() => {
+        if (!cancelled) {
+          statusInitRef.current = cacheKey;
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("初始化一站到底状态失败", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentStage,
+    isGroupedLastStand,
+    isLastStandMode,
+    meta.features.initialHp,
+    scoreRecord,
+    updateScoreStatus,
+  ]);
+
   const question = state.question;
   const questionId = question ? resolveQuestionId(question) : null;
   const isWordbankQuestion =
     !!question && isStandardQuestion(question) && question.type === "wordbank";
+  const isPointSelectQuestion =
+    !!question && isStandardQuestion(question) && question.type === "point-select";
   const isMatchingQuestion =
     !!question && isStandardQuestion(question) && question.type === "matching";
   const matchingConfig =
@@ -963,6 +1512,53 @@ function QuizPageContent() {
     const blanks = wordbankTemplate.blankIds.length;
     return canonicalizeWordbankSelections(selected, blanks, wordbankOptions);
   }, [isWordbankQuestion, selected, wordbankOptions, wordbankTemplate]);
+  const pointSelectOptions = useMemo(() => {
+    if (!isPointSelectQuestion || !question || !isStandardQuestion(question)) {
+      return [];
+    }
+    return question.options;
+  }, [isPointSelectQuestion, question]);
+  const pointSelectLabelMap = useMemo(() => {
+    if (!isPointSelectQuestion) {
+      return null;
+    }
+    const map = new Map<string, string>();
+    pointSelectOptions.forEach((option) => {
+      map.set(option.value, option.label);
+    });
+    return map;
+  }, [isPointSelectQuestion, pointSelectOptions]);
+  const pointSelectValues = useMemo(() => {
+    if (!isPointSelectQuestion) return [];
+    const rawSelections = Array.isArray(selected)
+      ? selected
+      : typeof selected === "string" && selected
+      ? parseWordbankSelectionInput(selected)
+      : [];
+    return rawSelections
+      .map((item) => canonicalizeWordbankValue(item, pointSelectOptions))
+      .filter((item) => item && item.trim());
+  }, [isPointSelectQuestion, pointSelectOptions, selected]);
+  const pointSelectSelectedSet = useMemo(
+    () => new Set(pointSelectValues),
+    [pointSelectValues]
+  );
+  const pointSelectDisplayLabel = useMemo(() => {
+    if (!isPointSelectQuestion) return "";
+    if (!pointSelectLabelMap) {
+      return pointSelectValues.join("");
+    }
+    return pointSelectValues
+      .map((value) => pointSelectLabelMap.get(value) ?? value)
+      .join("");
+  }, [isPointSelectQuestion, pointSelectLabelMap, pointSelectValues]);
+  const pointSelectDisplayTokens = useMemo(() => {
+    if (!isPointSelectQuestion) return [];
+    return pointSelectValues.map((value, index) => ({
+      key: `${value}-${index}`,
+      text: pointSelectLabelMap?.get(value) ?? value,
+    }));
+  }, [isPointSelectQuestion, pointSelectLabelMap, pointSelectValues]);
 
   const debugAnswerText = useMemo(() => {
     if (!DEBUG_SHOW_ANSWER || !question) {
@@ -1042,6 +1638,19 @@ function QuizPageContent() {
             .filter(Boolean);
           return buildSummary(letters);
         }
+        case "point-select": {
+          if (!pointSelectValues.length) {
+            return buildSummary([], "未选");
+          }
+          if (pointSelectDisplayLabel) {
+            return buildSummary([pointSelectDisplayLabel]);
+          }
+          const tokens = pointSelectValues.map((value) => {
+            const optionIndex = question.options.findIndex((option) => option.value === value);
+            return optionIndex >= 0 ? String.fromCharCode(65 + optionIndex) : value;
+          });
+          return buildSummary(tokens);
+        }
         case "matching": {
           if (!matchingPairs.length) return buildSummary([], "未选");
           const leftItems = matchingConfig?.left ?? [];
@@ -1091,6 +1700,8 @@ function QuizPageContent() {
   }, [
     matchingConfig,
     matchingPairs,
+    pointSelectDisplayLabel,
+    pointSelectValues,
     question,
     selected,
     wordbankValues,
@@ -1385,7 +1996,7 @@ function QuizPageContent() {
       delegateAnswerToControl(currentUserId, { isSelf: true });
       setSelected(null);
       setLockedWinnerId(null);
-      Toast.success("抢答成功，开始作答");
+      Toast.success("抢答成功，开始作答",500);
       return;
     }
 
@@ -1420,6 +2031,22 @@ function QuizPageContent() {
       return;
     }
 
+    if (
+      isPointSelectQuestion &&
+      isStandardQuestion(question) &&
+      question.type === "point-select"
+    ) {
+      if (Array.isArray(persisted)) {
+        setSelected(persisted);
+      } else if (typeof persisted === "string" && persisted.trim()) {
+        setSelected(parseWordbankSelectionInput(persisted));
+      } else {
+        setSelected([]);
+      }
+      setActiveMatchingLeft(null);
+      return;
+    }
+
     if (Array.isArray(persisted)) {
       setSelected(persisted);
       return;
@@ -1433,7 +2060,8 @@ function QuizPageContent() {
       isStandardQuestion(question) &&
       (question.type === "multiple" ||
         question.type === "indeterminate" ||
-        question.type === "wordbank")
+        question.type === "wordbank" ||
+        question.type === "point-select")
     ) {
       setSelected([]);
     } else if (
@@ -1447,7 +2075,7 @@ function QuizPageContent() {
     } else {
       setSelected(null);
     }
-  }, [answers, isMatchingQuestion, question, questionId]);
+  }, [answers, isMatchingQuestion, isPointSelectQuestion, question, questionId]);
 
   useEffect(() => {
     if (questionId) {
@@ -1527,12 +2155,33 @@ function QuizPageContent() {
   const showProgress = typeof totalQuestions === "number" && totalQuestions > 0;
   const progress = useMemo(() => {
     if (!showProgress) return 0;
-    const denominator = totalQuestions && totalQuestions > 0 ? totalQuestions : 1;
-    const ratio = questionOrdinal / denominator;
+
+    const total =
+      typeof totalQuestions === "number" && Number.isFinite(totalQuestions) && totalQuestions > 0
+        ? totalQuestions
+        : 0;
+
+    if (total <= 0) {
+      return 0;
+    }
+
+    if (meta.id === "ocean-adventure") {
+      const normalizedRemaining =
+        typeof oceanRemainingCount === "number" && Number.isFinite(oceanRemainingCount)
+          ? Math.max(0, Math.floor(oceanRemainingCount))
+          : Math.max(total - Math.max(questionOrdinal - 1, 0), 0);
+
+      const clampedRemaining = Math.max(0, Math.min(normalizedRemaining, total));
+      const fraction = clampedRemaining / total;
+      if (!Number.isFinite(fraction)) return 0;
+      return Math.max(0, Math.min(100, Math.round(fraction * 100)));
+    }
+
+    const ratio = questionOrdinal / total;
     if (!Number.isFinite(ratio)) return 0;
     const percentage = Math.round(ratio * 100);
     return Math.min(100, Math.max(0, percentage));
-  }, [questionOrdinal, showProgress, totalQuestions]);
+  }, [meta.id, oceanRemainingCount, questionOrdinal, showProgress, totalQuestions]);
   const progressValue = Number.isFinite(progress) ? progress : 0;
 
   const hpDisplay = meta.features.hasHp
@@ -1542,9 +2191,68 @@ function QuizPageContent() {
       }
     : null;
 
-  const isOceanEliminated =
-    meta.id === "ocean-adventure" && (hpDisplay?.current ?? 0) <= 0;
-  const isEliminated = meta.id === "last-stand" && (hpDisplay?.current ?? 0) <= 0;
+  const oceanEndReason =
+    meta.id === "ocean-adventure" ? state.oceanEndReason : undefined;
+  const isOceanFinished = oceanEndReason !== undefined;
+  const isOceanEliminated = oceanEndReason === "hp";
+  const isOceanTimerExpired = oceanEndReason === "timer";
+  const isOceanPoolExhausted = oceanEndReason === "empty";
+
+  const speedRunEndReason =
+    meta.id === "speed-run" ? state.speedRunEndReason : undefined;
+  const isSpeedRunFinished = speedRunEndReason !== undefined;
+  const isSpeedRunTimerExpired = speedRunEndReason === "timer";
+  const isSpeedRunCompleted = speedRunEndReason === "complete";
+
+  const speedRunStats = useMemo(() => {
+    if (meta.id !== "speed-run") return null;
+    const total = normalizedQuestions.length;
+    let correct = 0;
+    let wrong = 0;
+    let answered = 0;
+    const seen = new Set<string>();
+
+    for (const question of normalizedQuestions) {
+      if (!question?.id) continue;
+      if (seen.has(question.id)) continue;
+      seen.add(question.id);
+      const record = answers[question.id];
+      if (!record) continue;
+      const metadata = record.metadata as Record<string, unknown> | undefined;
+      if (metadata && typeof metadata["mode"] === "string" && metadata["mode"] !== meta.id) {
+        continue;
+      }
+      answered += 1;
+      const correctness = metadata?.["correct"];
+      if (correctness === true) {
+        correct += 1;
+      } else if (correctness === false) {
+        wrong += 1;
+      }
+    }
+
+    return {
+      total,
+      answered,
+      correct,
+      wrong,
+    };
+  }, [answers, meta.id, normalizedQuestions]);
+
+  const speedRunScore = speedRunStats?.correct ?? 0;
+  const speedRunAnswered = speedRunStats?.answered ?? 0;
+  const speedRunWrong = speedRunStats?.wrong ?? 0;
+  const speedRunTotal = speedRunStats?.total ?? (meta.id === "speed-run" ? normalizedQuestions.length : 0);
+  const speedRunUnanswered = Math.max(speedRunTotal - speedRunAnswered, 0);
+
+  const shouldShowActionBar =
+    meta.id === "speed-run"
+      ? !isSpeedRunFinished
+      : meta.id === "ocean-adventure"
+        ? !isOceanFinished
+        : false;
+
+  const isEliminated = isLastStandMode && (hpDisplay?.current ?? 0) <= 0;
 
   const oceanRemainingDisplay =
     meta.id === "ocean-adventure"
@@ -1556,8 +2264,49 @@ function QuizPageContent() {
         )
       : null;
 
+  const fetchOceanStats = useCallback(async () => {
+    if (!isOceanFinished) return;
+    const userId = user?.id;
+    if (!userId) {
+      setOceanStatsStatus("error");
+      setOceanStatsError("选手信息缺失，无法获取成绩。");
+      return;
+    }
+    const statsUrl = resolveTihaiUrl(
+      `/user/${encodeURIComponent(userId)}/answers`
+    );
+    setOceanStatsStatus("loading");
+    setOceanStatsError(null);
+    try {
+      const response = await fetch(statsUrl);
+      if (!response.ok) {
+        throw new Error(`成绩查询失败: ${response.status}`);
+      }
+      const data = await response.json();
+      if (!data?.success || !data?.stats) {
+        throw new Error("成绩数据格式不正确");
+      }
+      setOceanStats({
+        total: typeof data.stats.total === "number" ? data.stats.total : undefined,
+        correct: typeof data.stats.correct === "number" ? data.stats.correct : undefined,
+        wrong: typeof data.stats.wrong === "number" ? data.stats.wrong : undefined,
+        score: typeof data.stats.score === "number" ? data.stats.score : undefined,
+        accuracy: typeof data.stats.accuracy === "number" ? data.stats.accuracy : undefined,
+        lastAnswerTime:
+          typeof data.stats.lastAnswerTime === "number"
+            ? data.stats.lastAnswerTime
+            : undefined,
+      });
+      setOceanStatsStatus("success");
+    } catch (error) {
+      console.error("Failed to fetch ocean stats", error);
+      setOceanStatsStatus("error");
+      setOceanStatsError(error instanceof Error ? error.message : "成绩同步失败");
+    }
+  }, [isOceanFinished, user?.id]);
+
   useEffect(() => {
-    if (!isOceanEliminated) {
+    if (!isOceanFinished) {
       if (oceanStatsStatus !== "idle") {
         setOceanStats(null);
         setOceanStatsStatus("idle");
@@ -1565,61 +2314,13 @@ function QuizPageContent() {
       }
       return;
     }
-    if (!user?.id) return;
-    if (oceanStatsStatus === "loading" || oceanStatsStatus === "success") return;
-
-    let cancelled = false;
-    const controller = new AbortController();
-    const fetchStats = async () => {
-      setOceanStatsStatus("loading");
-      setOceanStatsError(null);
-      try {
-        const response = await fetch(`/api/user/${encodeURIComponent(user.id)}/answers`, {
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`成绩查询失败: ${response.status}`);
-        }
-        const data = await response.json();
-        if (cancelled) return;
-        if (data?.success && data?.stats) {
-          setOceanStats({
-            total: typeof data.stats.total === "number" ? data.stats.total : undefined,
-            correct: typeof data.stats.correct === "number" ? data.stats.correct : undefined,
-            wrong: typeof data.stats.wrong === "number" ? data.stats.wrong : undefined,
-            score: typeof data.stats.score === "number" ? data.stats.score : undefined,
-            accuracy: typeof data.stats.accuracy === "number" ? data.stats.accuracy : undefined,
-            lastAnswerTime:
-              typeof data.stats.lastAnswerTime === "number"
-                ? data.stats.lastAnswerTime
-                : undefined,
-          });
-          setOceanStatsStatus("success");
-          return;
-        }
-        throw new Error("成绩数据格式不正确");
-      } catch (error) {
-        if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
-          return;
-        }
-        console.error("Failed to fetch ocean stats", error);
-        setOceanStatsStatus("error");
-        setOceanStatsError(error instanceof Error ? error.message : "成绩同步失败");
-      }
-    };
-
-    void fetchStats();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [isOceanEliminated, oceanStatsStatus, user?.id]);
+    if (oceanStatsStatus !== "idle") return;
+    void fetchOceanStats();
+  }, [fetchOceanStats, isOceanFinished, oceanStatsStatus]);
 
   const handleRetryOceanStats = useCallback(() => {
-    if (!isOceanEliminated) return;
-    setOceanStatsStatus("idle");
-    setOceanStatsError(null);
-  }, [isOceanEliminated]);
+    void fetchOceanStats();
+  }, [fetchOceanStats]);
 
   const buzzerStatusLabel = useMemo(() => {
     if (!meta.features.requiresBuzzer) return null;
@@ -1642,13 +2343,22 @@ function QuizPageContent() {
     }
   }, [meta.features.requiresBuzzer, meta.id, state.awaitingHost, ultimateStage]);
 
-  const handleSelect = (value: string) => {
+  const handleSelect = useCallback((value: string) => {
     setSelected(value);
-  };
+  }, [setSelected]);
 
-  const handleMultiSelect = (values: (string | number)[]) => {
-    setSelected(values.map(String));
-  };
+  const toggleMultiOption = useCallback(
+    (value: string) => {
+      setSelected((prev) => {
+        const previous = Array.isArray(prev) ? prev.map(String) : [];
+        if (previous.includes(value)) {
+          return previous.filter((item) => item !== value);
+        }
+        return [...previous, value];
+      });
+    },
+    [setSelected]
+  );
 
   const handleWordbankBlankClick = useCallback(
     (index: number) => {
@@ -1723,6 +2433,35 @@ function QuizPageContent() {
       wordbankActiveIndex,
     ]
   );
+
+  const handlePointSelectOption = useCallback(
+    (optionValue: string) => {
+      if (!state.answeringEnabled || !isPointSelectQuestion) return;
+      const canonical = canonicalizeWordbankValue(optionValue, pointSelectOptions);
+      if (!canonical) return;
+      setSelected((prev) => {
+        const base = Array.isArray(prev)
+          ? prev
+          : typeof prev === "string" && prev
+          ? parseWordbankSelectionInput(prev)
+          : [];
+        const normalized = base
+          .map((item) => canonicalizeWordbankValue(item, pointSelectOptions))
+          .filter((item) => item && item.trim());
+        const existingIndex = normalized.findIndex((item) => item === canonical);
+        if (existingIndex >= 0) {
+          return normalized.filter((_, index) => index !== existingIndex);
+        }
+        return [...normalized, canonical];
+      });
+    },
+    [isPointSelectQuestion, pointSelectOptions, state.answeringEnabled]
+  );
+
+  const handlePointSelectClear = useCallback(() => {
+    if (!state.answeringEnabled || !isPointSelectQuestion) return;
+    setSelected([]);
+  }, [isPointSelectQuestion, state.answeringEnabled]);
 
   const handleMatchingLeftClick = useCallback(
     (leftId: string) => {
@@ -1829,6 +2568,15 @@ function QuizPageContent() {
   const handleSubmit = useCallback(
     async (options: SubmitOptions = {}, overrideValue?: string | string[]) => {
       const { allowEmpty = false, source = "manual" } = options;
+      let pendingManualTimestamp: number | null = null;
+      if (source === "manual") {
+        const now = Date.now();
+        if (now - lastManualSubmitAtRef.current < SUBMIT_THROTTLE_INTERVAL_MS) {
+          Toast.info("操作过于频繁，请稍后再试", SUBMIT_FREQUENT_TOAST_DURATION_MS);
+          return;
+        }
+        pendingManualTimestamp = now;
+      }
       if (isSubmitting) return;
 
       const currentQuestion = question;
@@ -1907,14 +2655,10 @@ function QuizPageContent() {
           );
         } else if (currentQuestion.type === "wordbank") {
           const { blankIds } = parseWordbankTemplate(currentQuestion.title);
-          const values = Array.isArray(resolvedSelection)
-            ? resolvedSelection.map(String)
-            : typeof resolvedSelection === "string" && resolvedSelection
-            ? [resolvedSelection]
-            : [];
+          const rawValues = parseWordbankSelectionInput(resolvedSelection);
           const normalizedValues = blankIds.length
-            ? blankIds.map((_, index) => values[index] ?? "")
-            : values;
+            ? blankIds.map((_, index) => rawValues[index] ?? "")
+            : rawValues;
           const canonicalValues = normalizedValues.map((item) =>
             canonicalizeWordbankValue(item, currentQuestion.options)
           );
@@ -1929,8 +2673,26 @@ function QuizPageContent() {
           submissionValue = canonicalValues;
           const hasValue = canonicalValues.some((item) => item);
           questionSheetAnswer = hasValue
-            ? JSON.stringify(canonicalValues)
+            ? canonicalValues.join("")
             : "未选";
+        } else if (currentQuestion.type === "point-select") {
+          const rawValues = parseWordbankSelectionInput(resolvedSelection);
+          const canonicalValues = rawValues
+            .map((item) => canonicalizeWordbankValue(item, currentQuestion.options))
+            .filter((item) => item && item.trim());
+          if (!allowEmpty && canonicalValues.length === 0) {
+            Toast.warn("请至少选择一个词语");
+            return;
+          }
+          submissionValue = canonicalValues;
+          const labelMap = new Map(
+            currentQuestion.options.map((option) => [option.value, option.label])
+          );
+          const labels = canonicalValues.map((value) => labelMap.get(value) ?? value);
+          questionSheetAnswer =
+            canonicalValues.length > 0
+              ? labels.join("") || canonicalValues.join("")
+              : "未选";
         } else if (currentQuestion.type === "fill") {
           const value =
             typeof resolvedSelection === "string"
@@ -1971,162 +2733,211 @@ function QuizPageContent() {
           typeof resolvedSelection === "string" ? resolvedSelection : "";
       }
 
+      if (pendingManualTimestamp !== null) {
+        lastManualSubmitAtRef.current = pendingManualTimestamp;
+      }
+
+      const requestId = createRequestId();
+      if (inflightSubmissionSetRef.current.has(requestId)) {
+        return;
+      }
+      inflightSubmissionSetRef.current.add(requestId);
+      activeSubmissionIdRef.current = requestId;
+
+      const currentQuestionIndex = state.questionIndex;
+      const speedRunRemainingSeconds =
+        meta.id === "speed-run"
+          ? Math.max(0, Math.round((state.timeRemaining ?? 0)))
+          : undefined;
+
       setSubmitting(true);
       try {
-        const submissionResult = await controls.submitAnswer(submissionValue);
-        const isCorrect = submissionResult?.correct;
-        const hpAfterAnswer = submissionResult?.hpAfterAnswer;
-        const rawResult = submissionResult?.rawResult;
+        await enqueueSubmission(async () => {
+          const submissionResult = await controls.submitAnswer(submissionValue, {
+            requestId,
+            timeoutMs: SUBMISSION_TIMEOUT_MS,
+          });
+          const isCorrect = submissionResult?.correct;
+          const hpAfterAnswer = submissionResult?.hpAfterAnswer;
+          const rawResult = submissionResult?.rawResult;
 
-        if (shouldHandleSubmitCommand && isStandardQuestion(currentQuestion)) {
-          const questionKey = currentQuestion.id;
-          const normalizedQuestion = normalizedQuestions.find(
-            (item) => item.id === questionKey
-          );
-          const questionRecordId = normalizedQuestion?.recordId
-            ? String(normalizedQuestion.recordId)
-            : undefined;
-          const questionSheetId = currentStage?.questionSheetId;
-          const scoreSheetId = currentStage?.scoreSheetId;
-          const scoreRecordId = scoreRecord?.recordId;
-          const userId = user?.id ?? undefined;
-          const answerForSheet = questionSheetAnswer || "未选";
-          const correctness = isCorrect === true ? "1" : "0";
-          const scoreAnswerValue =
-            currentQuestion.type === "fill" ? "填空" : correctness;
-          const lightValue: "0" | "1" = correctness === "1" ? "1" : "0";
-          const durationMs = answers[questionKey]?.durationMs;
-          const shouldReportTime = meta.id === "speed-run";
-          const timeSeconds =
-            shouldReportTime && typeof durationMs === "number"
-              ? Math.round(durationMs / 1000)
-              : undefined;
-          const scoreFieldKey = resolveScoreFieldKey(
-            normalizedQuestion,
-            state.questionIndex
-          );
-          const persistenceTasks: Promise<unknown>[] = [];
-
-          if (questionSheetId && questionRecordId && userId) {
-            persistenceTasks.push(
-              submitAnswerChoice({
-                datasheetId: questionSheetId,
-                recordId: questionRecordId,
-                userId,
-                fieldKey: userId,
-                answer: answerForSheet,
-              })
+          if (
+            (shouldHandleSubmitCommand || meta.id === "speed-run") &&
+            isStandardQuestion(currentQuestion)
+          ) {
+            const questionKey = currentQuestion.id;
+            const normalizedQuestion = normalizedQuestions.find(
+              (item) => item.id === questionKey
             );
-          }
+            const questionRecordId = normalizedQuestion?.recordId
+              ? String(normalizedQuestion.recordId)
+              : undefined;
+            const questionSheetId = currentStage?.questionSheetId;
+            const scoreSheetId = currentStage?.scoreSheetId;
+            const scoreRecordId = scoreRecord?.recordId;
+            const userId = user?.id ?? undefined;
+            const answerForSheet = questionSheetAnswer || "未选";
+            const correctness = isCorrect === true ? "1" : "0";
+            const scoreAnswerValue =
+              currentQuestion.type === "fill" ? "填空" : correctness;
+            const lightValue: "0" | "1" = correctness === "1" ? "1" : "0";
+            const scoreFieldKey = resolveScoreFieldKey(
+              normalizedQuestion,
+              currentQuestionIndex
+            );
+            const persistenceJobs: Array<() => Promise<unknown>> = [];
+            const timeFieldValue =
+              meta.id === "speed-run" && speedRunRemainingSeconds !== undefined
+                ? String(speedRunRemainingSeconds)
+                : undefined;
 
-          if (scoreSheetId && scoreRecordId && scoreFieldKey) {
-            const statusFieldKey =
-              meta.id === "last-stand"
+            if (questionSheetId && questionRecordId && userId) {
+              persistenceJobs.push(() =>
+                submitAnswerChoice({
+                  datasheetId: questionSheetId,
+                  recordId: questionRecordId,
+                  userId,
+                  fieldKey: userId,
+                  answer: answerForSheet,
+                })
+              );
+            }
+
+            if (scoreSheetId && scoreRecordId && scoreFieldKey) {
+              const statusFieldKey = isLastStandMode
                 ? resolveStatusFieldKey(scoreRecord?.fields)
                 : undefined;
-            const hpStatusValue =
-              meta.id === "last-stand" && typeof hpAfterAnswer === "number"
-                ? String(Math.max(0, Math.trunc(hpAfterAnswer)))
-                : undefined;
-            persistenceTasks.push(
-              submitJudgeResult({
-                datasheetId: scoreSheetId,
-                recordId: scoreRecordId,
-                questionId: scoreFieldKey,
-                answer: scoreAnswerValue,
-                time: timeSeconds,
-                light: lightValue,
-                statusFieldKey,
-                status: hpStatusValue,
-              })
-            );
-          }
+              let statusValue: string | undefined;
+              if (isLastStandMode && typeof hpAfterAnswer === "number") {
+                if (!isGroupedLastStand) {
+                  statusValue = String(Math.max(0, Math.trunc(hpAfterAnswer)));
+                } else {
+                  const indicator = resolveLastStandGroupStatusIndicator(currentStage?.name);
+                  statusValue = hpAfterAnswer > 0 ? indicator ?? undefined : "0";
+                  if (hpAfterAnswer > 0 && !indicator) {
+                    console.warn("Grouped last-stand stage缺少状态标识符, 将跳过状态同步");
+                    statusValue = undefined;
+                  }
+                }
+              }
+              persistenceJobs.push(() =>
+                submitJudgeResult({
+                  datasheetId: scoreSheetId,
+                  recordId: scoreRecordId,
+                  questionId: scoreFieldKey,
+                  answer: scoreAnswerValue,
+                  time: timeFieldValue,
+                  light: lightValue,
+                  statusFieldKey,
+                  status: statusValue,
+                })
+              );
+            }
 
-          if (persistenceTasks.length > 0) {
-            try {
-              await Promise.all(persistenceTasks);
-            } catch (persistError) {
-              console.error("同步答题记录失败", persistError);
-              Toast.error("答题结果同步失败");
+            if (persistenceJobs.length > 0) {
+              const job: PersistenceJob = {
+                id: `${requestId}-sync`,
+                label: `题目同步（${resolveQuestionId(currentQuestion)}）`,
+                createdAt: Date.now(),
+                attempts: 0,
+                execute: async () => {
+                  await withTimeout(
+                    Promise.all(persistenceJobs.map((task) => task())),
+                    PERSISTENCE_TIMEOUT_MS,
+                    () =>
+                      new QuizApiError(
+                        "timeout",
+                        "答题记录同步超时",
+                        "请在同步队列中手动重试"
+                      )
+                  );
+                },
+              };
+              enqueuePersistenceJob(job);
             }
           }
-        }
 
-        const showCorrectness =
-          meta.id === "speed-run" || meta.id === "ocean-adventure";
-        const notifyStyle = {
-          position: "fixed" as const,
-          top: notifyOffset,
-          left: 0,
-          right: 0,
-          pointerEvents: "none" as const,
-          display: "flex",
-          justifyContent: "center",
-          zIndex: 1200,
-        };
-        if (source === "command") {
-          setCommandSubmissionLocked(true);
-        } else {
-          setCommandSubmissionLocked(false);
-          if (showCorrectness) {
-            if (isCorrect === true) {
-              Notify.success({
-                content: "回答正确",
-                style: notifyStyle,
-                duration: 500,
-              });
-            } else if (isCorrect === false) {
-              Notify.error({
-                content: "回答错误",
-                style: notifyStyle,
-                duration: 500,
-              });
-            } else {
-              Notify.info({
-                content: "答案已提交",
-                style: notifyStyle,
-                duration: 500,
-              });
-            }
+          const showCorrectness =
+            meta.id === "speed-run" || meta.id === "ocean-adventure";
+          const notifyStyle = {
+            position: "fixed" as const,
+            top: notifyOffset,
+            left: 0,
+            right: 0,
+            pointerEvents: "none" as const,
+            display: "flex",
+            justifyContent: "center",
+            zIndex: 1200,
+          };
+          if (source === "command") {
+            setCommandSubmissionLocked(true);
           } else {
-            Toast.success("答案已提交");
-          }
-        }
-
-        if (meta.id === "ocean-adventure") {
-          if (submissionResult?.stats || submissionResult?.score) {
-            setOceanStats((prev) => ({
-              total: submissionResult.stats?.total ?? prev?.total,
-              correct: submissionResult.stats?.correct ?? prev?.correct,
-              wrong: submissionResult.stats?.wrong ?? prev?.wrong,
-              accuracy: submissionResult.stats?.accuracy ?? prev?.accuracy,
-              lastAnswerTime:
-                submissionResult.stats?.lastAnswerTime ?? prev?.lastAnswerTime,
-              score: submissionResult.score?.total ?? prev?.score,
-            }));
-            setOceanStatsError(null);
-            if (typeof hpAfterAnswer === "number" && hpAfterAnswer <= 0) {
-              setOceanStatsStatus("success");
+            setCommandSubmissionLocked(false);
+            if (showCorrectness) {
+              if (isCorrect === true) {
+                Notify.success({
+                  content: "回答正确",
+                  style: notifyStyle,
+                  duration: 500,
+                });
+              } else if (isCorrect === false) {
+                Notify.error({
+                  content: "回答错误",
+                  style: notifyStyle,
+                  duration: 500,
+                });
+              } else {
+                Notify.info({
+                  content: "答案已提交",
+                  style: notifyStyle,
+                  duration: 500,
+                });
+              }
+            } else {
+              Toast.success("答案已提交");
             }
           }
 
-          const shouldSkipNext =
-            rawResult === "wrong" &&
-            typeof hpAfterAnswer === "number" &&
-            hpAfterAnswer <= 0;
-          if (!shouldSkipNext) {
-            await controls.requestNextQuestion();
+          if (meta.id === "ocean-adventure") {
+            if (submissionResult?.stats || submissionResult?.score) {
+              setOceanStats((prev) => ({
+                total: submissionResult.stats?.total ?? prev?.total,
+                correct: submissionResult.stats?.correct ?? prev?.correct,
+                wrong: submissionResult.stats?.wrong ?? prev?.wrong,
+                accuracy: submissionResult.stats?.accuracy ?? prev?.accuracy,
+                lastAnswerTime:
+                  submissionResult.stats?.lastAnswerTime ?? prev?.lastAnswerTime,
+                score: submissionResult.score?.total ?? prev?.score,
+              }));
+              setOceanStatsError(null);
+              if (typeof hpAfterAnswer === "number" && hpAfterAnswer <= 0) {
+                setOceanStatsStatus("success");
+              }
+            }
+
+            const shouldSkipNext =
+              rawResult === "wrong" &&
+              typeof hpAfterAnswer === "number" &&
+              hpAfterAnswer <= 0;
+            if (!shouldSkipNext) {
+              await controls.requestNextQuestion();
+            }
           }
-        }
+
+          return submissionResult;
+        });
       } catch (error) {
-        Toast.error("提交失败，请稍后重试");
-        console.error(error);
+        console.error("提交答案失败", error);
+        showQuizApiErrorToast(error, "提交答案");
       } finally {
+        inflightSubmissionSetRef.current.delete(requestId);
+        if (activeSubmissionIdRef.current === requestId) {
+          activeSubmissionIdRef.current = null;
+        }
         setSubmitting(false);
       }
     },
     [
-      answers,
       controls,
       currentStage,
       meta.id,
@@ -2141,13 +2952,112 @@ function QuizPageContent() {
       setOceanStatsStatus,
       state.answeringEnabled,
       state.questionIndex,
+      state.timeRemaining,
       submitAnswerChoice,
       submitJudgeResult,
       question,
       user?.id,
       isSubmitting,
+      isLastStandMode,
+      isGroupedLastStand,
+      enqueuePersistenceJob,
+      enqueueSubmission,
     ]
   );
+
+  const handleRetractCommand = useCallback(async () => {
+    if (retractHandlingRef.current) return;
+    if (!isLastStandMode) return;
+    const recoverControl = controls.recoverHp;
+    if (!recoverControl) return;
+
+    const maxHp = Math.max(0, Math.trunc(meta.features.initialHp ?? 0));
+    if (maxHp <= 0) return;
+
+    const scoreSheetId = currentStage?.scoreSheetId;
+    const scoreRecordId = scoreRecord?.recordId;
+    if (!scoreSheetId || !scoreRecordId) {
+      Toast.error("当前环节缺少分数表配置，无法恢复血量");
+      return;
+    }
+
+    const statusFieldKey = resolveStatusFieldKey(scoreRecord?.fields);
+    if (!statusFieldKey) {
+      Toast.error("当前环节缺少血量字段配置，无法恢复血量");
+      return;
+    }
+    const lastHpPenalty = state.lastHpPenalty;
+    if (!lastHpPenalty || lastHpPenalty.amount <= 0) {
+      Toast.info("上一题未扣血，无需回退");
+      return;
+    }
+
+    const currentHp = Math.trunc(state.hp ?? maxHp);
+    const restoredHp = Math.trunc(lastHpPenalty.hpBefore);
+    const targetHp = Math.max(0, Math.min(restoredHp, maxHp));
+
+    if (targetHp <= currentHp) {
+      Toast.info("当前血量无需回退");
+      return;
+    }
+
+    let statusValue: string | undefined;
+    if (isGroupedLastStand) {
+      const indicator = resolveLastStandGroupStatusIndicator(currentStage?.name);
+      if (!indicator) {
+        Toast.error("当前环节缺少状态标识符，无法恢复状态");
+        return;
+      }
+      statusValue = targetHp > 0 ? indicator : "0";
+    } else {
+      statusValue = String(targetHp);
+    }
+
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
+
+    retractHandlingRef.current = true;
+    let attempt = 0;
+    let lastError: unknown;
+    try {
+      while (attempt < 3) {
+        try {
+          await updateScoreStatus({
+            datasheetId: scoreSheetId,
+            recordId: scoreRecordId,
+            fieldKey: statusFieldKey,
+            status: statusValue,
+          });
+          recoverControl(targetHp);
+          return;
+        } catch (error) {
+          lastError = error;
+          attempt += 1;
+          if (attempt < 3) {
+            await wait(1000);
+          }
+        }
+      }
+      console.error("血量恢复同步失败", lastError);
+      Toast.error("血量恢复失败，请稍后重试");
+    } finally {
+      retractHandlingRef.current = false;
+    }
+  }, [
+    controls.recoverHp,
+    currentStage?.scoreSheetId,
+    currentStage?.name,
+    meta.features.initialHp,
+    isLastStandMode,
+    isGroupedLastStand,
+    scoreRecord?.fields,
+    scoreRecord?.recordId,
+    state.lastHpPenalty,
+    state.hp,
+    updateScoreStatus,
+  ]);
 
   useEffect(() => {
     if (!commandMessage) return;
@@ -2156,6 +3066,7 @@ function QuizPageContent() {
     }
 
     const rawPayload = commandMessage.payload.trim();
+    const normalizedCommand = rawPayload.toLowerCase();
     const isNumericCommand = /^\d+$/.test(rawPayload);
 
     if (isNumericCommand) {
@@ -2170,10 +3081,16 @@ function QuizPageContent() {
       return;
     }
 
+    if (normalizedCommand === "retract") {
+      lastCommandHandledRef.current = commandMessage.timestamp;
+      void handleRetractCommand();
+      return;
+    }
+
     if (boardStatus === "uploading" || boardStatus === "success") return;
 
     if (!shouldHandleSubmitCommand) return;
-    if (rawPayload.toLowerCase() !== "submit") return;
+    if (normalizedCommand !== "submit") return;
     if (commandMessage.timestamp === lastSubmitCommandRef.current) return;
     lastSubmitCommandRef.current = commandMessage.timestamp;
     lastCommandHandledRef.current = commandMessage.timestamp;
@@ -2214,6 +3131,7 @@ function QuizPageContent() {
     boardStatus,
     boardRef,
     commandMessage,
+    handleRetractCommand,
     handleSubmit,
     meta.id,
     question,
@@ -2268,6 +3186,79 @@ function QuizPageContent() {
     </div>
   );
 
+  const renderSpeedRunResult = () => {
+    if (!isSpeedRunFinished) {
+      return null;
+    }
+    const ResultBadgeIcon = isSpeedRunTimerExpired ? ErrorBadgeIcon : SuccessCheckIcon;
+    const resultTitle = isSpeedRunTimerExpired ? "倒计时结束" : "全部题目完成";
+    const resultSubtitle = isSpeedRunTimerExpired
+      ? "作答时间已用尽，本轮成绩已锁定，请等待主持人下一步指令。"
+      : "已作答全部题目，本轮成绩已锁定，请等待主持人下一步指令。";
+
+    const displayEntries: Array<[string, string]> = [];
+    const pushEntry = (label: string, value: number | string | undefined) => {
+      if (value === undefined || value === null) return;
+      if (typeof value === "number") {
+        displayEntries.push([label, value.toString()]);
+        return;
+      }
+      const text = value.trim();
+      if (!text) return;
+      displayEntries.push([label, text]);
+    };
+
+    pushEntry("总题数", speedRunTotal);
+    pushEntry("已作答", speedRunAnswered);
+    pushEntry("答对", speedRunScore);
+    pushEntry("答错", speedRunWrong);
+    if (speedRunUnanswered > 0) {
+      pushEntry("未作答", speedRunUnanswered);
+    }
+    if (isSpeedRunCompleted && typeof state.timeRemaining === "number") {
+      pushEntry("剩余时间", formatSeconds(state.timeRemaining));
+    }
+
+    const statusMessage = isSpeedRunTimerExpired
+      ? "倒计时已结束，本轮成绩已锁定，请等待主持人下一步指令。"
+      : "成绩已锁定，请等待主持人下一步指令。";
+
+    return (
+      <div className={styles.oceanResultWrapper}>
+        <div className={styles.commandSubmissionResult}>
+          <div className={styles.commandSubmissionBadge}>
+            <ResultBadgeIcon />
+          </div>
+          <p className={styles.commandSubmissionTitle}>{resultTitle}</p>
+          <p className={styles.commandSubmissionSubtitle}>{resultSubtitle}</p>
+        </div>
+
+        <div className={styles.oceanResultScoreCard}>
+          <div className={styles.oceanResultScore}>
+            <span className={styles.oceanResultLabel}>当前得分</span>
+            <span className={styles.oceanResultValue}>{speedRunScore}</span>
+            <span className={styles.oceanResultKeyHint}>每题 1 分</span>
+          </div>
+
+          {displayEntries.length > 0 ? (
+            <dl className={styles.oceanResultList}>
+              {displayEntries.map(([key, value]) => (
+                <div key={key} className={styles.oceanResultItem}>
+                  <dt className={styles.oceanResultItemKey}>{key}</dt>
+                  <dd className={styles.oceanResultItemValue}>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+
+          {statusMessage ? (
+            <p className={styles.oceanResultMessage}>{statusMessage}</p>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   const renderOceanResult = () => {
     const fields = scoreRecord?.fields;
     const primary = resolvePrimaryScoreField(fields);
@@ -2317,7 +3308,32 @@ function QuizPageContent() {
 
     const isLoadingStats = oceanStatsStatus === "loading";
     const isErrorStats = oceanStatsStatus === "error";
-    const canRetry = isErrorStats && isOceanEliminated;
+    const canRetry = isErrorStats && isOceanFinished;
+
+    const { resultTitle, resultSubtitle } = (() => {
+      if (isOceanEliminated) {
+        return {
+          resultTitle: "挑战结束",
+          resultSubtitle: "血量已耗尽，本轮成绩已锁定，请等待主持人下一步指令。",
+        };
+      }
+      if (isOceanTimerExpired) {
+        return {
+          resultTitle: "倒计时结束",
+          resultSubtitle: "作答时间已用尽，本轮成绩已锁定，请等待主持人下一步指令。",
+        };
+      }
+      if (isOceanPoolExhausted) {
+        return {
+          resultTitle: "全部题目完成",
+          resultSubtitle: "题库已清空，本轮成绩已锁定，请等待主持人下一步指令。",
+        };
+      }
+      return {
+        resultTitle: "挑战结束",
+        resultSubtitle: "本轮成绩已锁定，请等待主持人下一步指令。",
+      };
+    })();
 
     let statusMessage = "成绩正在同步中，请稍候查看最新得分。";
     if (isLoadingStats) {
@@ -2338,10 +3354,8 @@ function QuizPageContent() {
           <div className={styles.commandSubmissionBadge}>
             <EliminatedIcon />
           </div>
-          <p className={styles.commandSubmissionTitle}>挑战结束</p>
-          <p className={styles.commandSubmissionSubtitle}>
-            血量已耗尽，本轮成绩已锁定，请等待主持人下一步指令。
-          </p>
+          <p className={styles.commandSubmissionTitle}>{resultTitle}</p>
+          <p className={styles.commandSubmissionSubtitle}>{resultSubtitle}</p>
         </div>
 
         <div className={styles.oceanResultScoreCard}>
@@ -2530,32 +3544,24 @@ function QuizPageContent() {
     if (standard.type === "multiple" || standard.type === "indeterminate") {
       const multipleValue = Array.isArray(selected) ? selected : [];
       return (
-        <Checkbox.Group
-          value={multipleValue}
-          onChange={handleMultiSelect}
-          layout="block"
-          className={styles.optionGroup}
-          icons={null}
-        >
+        <div className={styles.optionGroup} role="group">
           {standard.options.map((option, index) => {
             const isActive = multipleValue.includes(option.value);
-            const cardClass = `${styles.optionCard} ${isActive ? styles.optionCardActive : ""}`;
-            const badgeClass = `${styles.optionBadge} ${isActive ? styles.optionBadgeActive : ""}`;
             return (
-              <Checkbox key={option.value} value={option.value} className={styles.optionControl}>
-                <div className={cardClass}>
-                  <span className={badgeClass}>{String.fromCharCode(65 + index)}</span>
-                  <div className={styles.optionContent}>
-                    <span className={styles.optionLabel}>{option.label}</span>
-                    {option.description ? (
-                      <span className={styles.optionDesc}>{option.description}</span>
-                    ) : null}
-                  </div>
-                </div>
-              </Checkbox>
+              <OptionCardButton
+                key={option.value}
+                value={option.value}
+                label={option.label}
+                description={option.description}
+                badge={String.fromCharCode(65 + index)}
+                active={isActive}
+                disabled={!state.answeringEnabled}
+                onSelect={toggleMultiOption}
+                role="checkbox"
+              />
             );
           })}
-        </Checkbox.Group>
+        </div>
       );
     }
 
@@ -2585,6 +3591,34 @@ function QuizPageContent() {
               >
                 <span className={styles.wordbankOptionBadge}>{option.value}</span>
                 <span className={styles.wordbankOptionLabel}>{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    if (standard.type === "point-select") {
+      return (
+        <div className={styles.pointSelectOptions} role="group">
+          {standard.options.map((option) => {
+            const isSelected = pointSelectSelectedSet.has(option.value);
+            const buttonClass = [
+              styles.pointSelectOption,
+              isSelected ? styles.pointSelectOptionSelected : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={buttonClass}
+                onClick={() => handlePointSelectOption(option.value)}
+                disabled={!state.answeringEnabled}
+                aria-pressed={isSelected}
+              >
+                <span className={styles.pointSelectOptionLabel}>{option.label}</span>
               </button>
             );
           })}
@@ -2647,32 +3681,24 @@ function QuizPageContent() {
 
     const singleValue = typeof selected === "string" ? selected : null;
     return (
-      <Radio.Group
-        value={singleValue ?? undefined}
-        onChange={(value) => handleSelect(String(value))}
-        layout="block"
-        className={styles.optionGroup}
-        icons={null}
-      >
+      <div className={styles.optionGroup} role="radiogroup">
         {standard.options.map((option, index) => {
           const isActive = singleValue === option.value;
-          const cardClass = `${styles.optionCard} ${isActive ? styles.optionCardActive : ""}`;
-          const badgeClass = `${styles.optionBadge} ${isActive ? styles.optionBadgeActive : ""}`;
           return (
-            <Radio key={option.value} value={option.value} className={styles.optionControl}>
-              <div className={cardClass}>
-                <span className={badgeClass}>{String.fromCharCode(65 + index)}</span>
-                <div className={styles.optionContent}>
-                  <span className={styles.optionLabel}>{option.label}</span>
-                  {option.description ? (
-                    <span className={styles.optionDesc}>{option.description}</span>
-                  ) : null}
-                </div>
-              </div>
-            </Radio>
+            <OptionCardButton
+              key={option.value}
+              value={option.value}
+              label={option.label}
+              description={option.description}
+              badge={String.fromCharCode(65 + index)}
+              active={isActive}
+              disabled={!state.answeringEnabled}
+              onSelect={handleSelect}
+              role="radio"
+            />
           );
         })}
-      </Radio.Group>
+      </div>
     );
   };
 
@@ -2697,58 +3723,94 @@ function QuizPageContent() {
             ocean.optionPool
           );
 
-    const handleChange = (rawValues: (string | number)[]) => {
+    const handleOceanSelect = (optionId: string) => {
       if (selectionMode === "single") {
-        if (!rawValues || rawValues.length === 0) {
-          setSelected(null);
-          return;
-        }
-        const last = String(rawValues[rawValues.length - 1]);
-        handleSelect(last);
+        setSelected((prev) => {
+          const previousValue =
+            typeof prev === "string"
+              ? prev
+              : Array.isArray(prev) && prev.length > 0
+              ? String(prev[prev.length - 1])
+              : null;
+          if (previousValue === optionId) {
+            return null;
+          }
+          return optionId;
+        });
         return;
       }
 
-      const normalized = sortOceanSelectionIds(rawValues, ocean.optionPool);
-      setSelected(normalized);
+      setSelected((prev) => {
+        const base =
+          Array.isArray(prev) && prev.length > 0
+            ? prev.map(String)
+            : typeof prev === "string" && prev
+            ? [prev]
+            : [];
+        if (base.includes(optionId)) {
+          return base.filter((item) => item !== optionId);
+        }
+        return sortOceanSelectionIds([...base, optionId], ocean.optionPool);
+      });
     };
 
+    const groupRole = selectionMode === "single" ? "radiogroup" : "group";
+
     return (
-      <Checkbox.Group
-        value={values}
-        onChange={handleChange}
-        layout="block"
-        className={styles.optionGroup}
-        icons={null}
-      >
+      <div className={styles.optionGroup} role={groupRole}>
         {ocean.optionPool.map((option, index) => {
           const isActive = values.includes(option.id);
-          const cardClass = `${styles.optionCard} ${isActive ? styles.optionCardActive : ""}`;
-          const badgeClass = `${styles.optionBadge} ${isActive ? styles.optionBadgeActive : ""}`;
           return (
-            <Checkbox key={option.id} value={option.id} className={styles.optionControl}>
-              <div className={cardClass}>
-                <span className={badgeClass}>{String.fromCharCode(65 + index)}</span>
-                <div className={styles.optionContent}>
-                  <span className={styles.optionLabel}>{option.label}</span>
-                  {option.meta?.note ? (
-                    <span className={styles.optionDesc}>{String(option.meta.note)}</span>
-                  ) : null}
-                </div>
-              </div>
-            </Checkbox>
+            <OptionCardButton
+              key={option.id}
+              value={option.id}
+              label={option.label}
+              description={
+                option.meta?.note ? String(option.meta.note) : undefined
+              }
+              badge={String.fromCharCode(65 + index)}
+              active={isActive}
+              disabled={!state.answeringEnabled}
+              onSelect={handleOceanSelect}
+              role={selectionMode === "single" ? "radio" : "checkbox"}
+            />
           );
         })}
-      </Checkbox.Group>
+      </div>
     );
   };
 
   const renderQuestionContent = () => {
-    if (isOceanEliminated) {
+    if (meta.id === "speed-run" && isSpeedRunFinished) {
+      return renderSpeedRunResult();
+    }
+
+    if (isOceanFinished) {
       return renderOceanResult();
     }
 
     if (isEliminated) {
       return renderEliminationState();
+    }
+
+    if (
+      meta.id === "speed-run" &&
+      (waitingForStageStart || !questionGateOpened || state.questionIndex < 0)
+    ) {
+      return (
+        <div className={styles.questionLoading}>
+          <div className={`${styles.statusBadge} ${styles.statusBadgeSuccess}`}>
+            <SuccessCheckIcon className={styles.statusIcon} />
+          </div>
+          <div className={styles.loadingTexts}>
+            <p className={styles.loadingPrimary}>题目加载完成</p>
+            <p className={styles.loadingSecondary}>请做好准备 比赛即将开始</p>
+            <p className={styles.loadingMeta}>
+              已准备 {normalizedQuestions.length} 道题，等待主持人发出切题指令
+            </p>
+          </div>
+        </div>
+      );
     }
 
     if (meta.id === "ocean-adventure" && waitingForStageStart) {
@@ -2926,14 +3988,71 @@ function QuizPageContent() {
           );
         }
 
+        if (isPointSelectQuestion) {
+          const isClearDisabled =
+            !state.answeringEnabled ||
+            pointSelectValues.length === 0 ||
+            isCommandSubmissionLocked;
+          return (
+            <div className={styles.questionTitleRow}>
+              <h2 className={styles.questionTitle}>{question.title}</h2>
+              <button
+                type="button"
+                className={styles.pointSelectClear}
+                onClick={handlePointSelectClear}
+                disabled={isClearDisabled}
+              >
+                <span
+                  aria-hidden="true"
+                  className={styles.pointSelectClearIcon}
+                  style={{
+                    WebkitMaskImage: `url(${trashIcon.src})`,
+                    maskImage: `url(${trashIcon.src})`,
+                  }}
+                />
+                清空
+              </button>
+            </div>
+          );
+        }
+
         return <h2 className={styles.questionTitle}>{question.title}</h2>;
       })();
-          const optionsNode = renderStandardOptions(question);
-          return (
-            <>
-              <div className={styles.questionHeader}>
-                <div className={styles.questionHeaderLeft}>
-                  <span className={styles.questionTag}>{resolveStandardTypeLabel(question.type)}</span>
+        const optionsNode = renderStandardOptions(question);
+        const pointSelectInputNode =
+          isPointSelectQuestion && isStandardQuestion(question) ? (
+            <div className={styles.pointSelectArea}>
+              <div
+                className={[
+                  styles.pointSelectInput,
+                  pointSelectValues.length ? styles.pointSelectInputFilled : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                role="textbox"
+                aria-readonly="true"
+                aria-label="已选择词语"
+                tabIndex={0}
+              >
+                {pointSelectDisplayTokens.length ? (
+                  pointSelectDisplayTokens.map((token) => (
+                    <span key={token.key} className={styles.pointSelectToken}>
+                      {token.text}
+                    </span>
+                  ))
+                ) : (
+                  <span className={styles.pointSelectPlaceholder}>
+                    点击下方词语拼成答案
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : null;
+        return (
+          <>
+            <div className={styles.questionHeader}>
+              <div className={styles.questionHeaderLeft}>
+                <span className={styles.questionTag}>{resolveStandardTypeLabel(question.type)}</span>
                   {debugAnswerText ? (
                     <span className={`${styles.questionTag} ${styles.answerTag}`}>
                       <span className={styles.answerTagLabel}>答案：</span>
@@ -2965,7 +4084,7 @@ function QuizPageContent() {
                       </Tag>
                     ))
                   ) : (
-                    <Tag size="small" filleted={true} type="hollow" className={styles.selectionTagMuted}>
+                    <Tag size="small" filleted type="hollow" className={styles.selectionTagMuted}>
                       {selectionSummary.emptyLabel ?? "未选"}
                     </Tag>
                   )}
@@ -2974,6 +4093,7 @@ function QuizPageContent() {
             </div>
           </div>
           {questionTitleNode}
+          {pointSelectInputNode}
           {isCommandSubmissionLocked && question.type !== "fill" ? (
             renderCommandSubmissionResult()
           ) : (
@@ -3012,6 +4132,7 @@ function QuizPageContent() {
                       <Tag
                         key={`selection-${index}-${token}`}
                         size="small"
+                        filleted
                         type="primary"
                         className={styles.selectionTag}
                       >
@@ -3019,7 +4140,7 @@ function QuizPageContent() {
                       </Tag>
                     ))
                   ) : (
-                    <Tag size="small" type="hollow" className={styles.selectionTagMuted}>
+                    <Tag size="small" filleted type="hollow" className={styles.selectionTagMuted}>
                       {selectionSummary.emptyLabel ?? "未选"}
                     </Tag>
                   )}
@@ -3030,7 +4151,7 @@ function QuizPageContent() {
           <h2 className={styles.questionTitle}>{question.stem}</h2>
           <div className={styles.categories}>
             {question.categories.map((category) => (
-              <Tag key={category} type="primary" size="small" className={styles.categoryTag}>
+              <Tag key={category} type="primary" size="small" filleted className={styles.categoryTag}>
                 {category}
               </Tag>
             ))}
@@ -3105,15 +4226,22 @@ function QuizPageContent() {
     );
   };
 
+  const navTitle = useMemo(() => {
+    const display = currentStage?.displayName?.trim();
+    if (display) {
+      return display;
+    }
+    const name = currentStage?.name?.trim();
+    return name || meta.name || meta.id;
+  }, [currentStage?.displayName, currentStage?.name, meta.id, meta.name]);
   const hasQuestion = Boolean(question);
   const showQuestionLoading = meta.questionFlow === "push" && !questionGateOpened;
-  const shouldShowActionBar = meta.id === "speed-run" || meta.id === "ocean-adventure";
   const submitLabel =
     meta.id === "speed-run"
       ? "提交并进入下一题"
       : meta.id === "ocean-adventure"
       ? "提交并抢下一题"
-      : meta.id === "qa" || meta.id === "last-stand"
+      : isQaMode || isLastStandMode
       ? "提交等待主持人"
       : meta.id === "ultimate-challenge"
       ? "提交并等待裁决"
@@ -3124,11 +4252,66 @@ function QuizPageContent() {
       <ArcoClient fallback={<div className={styles.fallback}>加载中...</div>}>
         <div ref={navWrapperRef}>
           <NavBar
-            title={meta.name || meta.id}
+            title={navTitle}
             leftContent={null}
           />
         </div>
         <div className={styles.body}>
+          <div className={styles.syncQueueWrapper}>
+            <div className={styles.syncQueueIndicator}>
+              <div className={styles.syncQueueLabelGroup}>
+                <span className={styles.syncQueueLabel}>成绩上传队列</span>
+                <span className={styles.syncQueueBadge}>
+                  待处理 {persistenceStats.pending}
+                </span>
+                <span
+                  className={`${styles.syncQueueBadge} ${
+                    persistenceStats.failed > 0 ? styles.syncQueueBadgeDanger : ""
+                  }`}
+                >
+                  失败 {persistenceStats.failed}
+                </span>
+              </div>
+              <div className={styles.syncQueueControls}>
+                <Button
+                  type="ghost"
+                  size="mini"
+                  className={styles.syncQueueActionButton}
+                  onClick={() => setShowPersistenceDetails((prev) => !prev)}
+                >
+                  {showPersistenceDetails ? "收起" : "详情"}
+                </Button>
+                <Button
+                  type="ghost"
+                  size="mini"
+                  className={styles.syncQueueActionButton}
+                  onClick={handleRetryPersistenceFailures}
+                  disabled={persistenceStats.failed === 0}
+                >
+                  重试
+                </Button>
+              </div>
+            </div>
+            {showPersistenceDetails ? (
+              <div className={styles.syncQueueDetails}>
+                {persistenceStats.failedItems.length === 0 ? (
+                  <p className={styles.syncQueueEmpty}>当前无失败任务</p>
+                ) : (
+                  persistenceStats.failedItems.map((item) => (
+                    <div key={item.id} className={styles.syncQueueRow}>
+                      <div className={styles.syncQueueRowHeader}>
+                        <span className={styles.syncQueueRowLabel}>{item.label}</span>
+                        <span className={styles.syncQueueRowMeta}>尝试 {item.attempts}</span>
+                      </div>
+                      {item.lastErrorMessage ? (
+                        <p className={styles.syncQueueRowError}>{item.lastErrorMessage}</p>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
           <section className={styles.progressCard}>
             <div className={styles.progressHead}>
               <span className={styles.progressCounter}>
@@ -3192,9 +4375,9 @@ function QuizPageContent() {
           <section className={styles.questionCard}>
             {showQuestionLoading ? renderQuestionLoadingState() : renderQuestionContent()}
           </section>
-          {meta.features.hasHp &&
+        {meta.features.hasHp &&
           meta.questionFlow === "push" &&
-          meta.id !== "last-stand" &&
+          !isLastStandMode &&
           !showQuestionLoading ? (
             <section className={styles.judgementPanel}>
               <h3 className={styles.panelTitle}>主持人判定</h3>
@@ -3228,6 +4411,7 @@ function QuizPageContent() {
                 size="large"
                 className={styles.nextButton}
                 onClick={() => void handleSubmit()}
+                loading={isSubmitting}
                 disabled={
                   !hasQuestion || !state.answeringEnabled || isSubmitting || isCommandSubmissionLocked
                 }

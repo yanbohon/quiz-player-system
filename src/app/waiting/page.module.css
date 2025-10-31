@@ -106,6 +106,27 @@
   justify-content: center;
   text-transform: uppercase;
   box-shadow: 0 10px 20px rgba(22, 93, 255, 0.28);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.avatarHasImage {
+  background: #ffffff;
+  box-shadow: 0 6px 16px rgba(22, 93, 255, 0.16);
+  border: 1px solid var(--color-neutral-3, #e5e6eb);
+}
+
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background-color: #ffffff;
+}
+
+.avatarIcon {
+  width: 36px;
+  height: 36px;
+  color: #ffffff;
 }
 
 .identityInfo {
@@ -124,13 +145,6 @@
 .identityMeta {
   font-size: 14px;
   color: var(--color-text-3, #86909c);
-}
-
-.eventName {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-text-2, #4e5969);
 }
 
 .infoGrid {
@@ -206,6 +220,79 @@
 }
 
 .waitingText {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-3, #86909c);
+}
+
+.rankArea {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.rankTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-2, #4e5969);
+}
+
+.rankLoading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.rankList {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-neutral-3, #e5e6eb);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #F7F8FA;
+}
+
+.rankRow {
+  display: flex;
+  flex-direction: column;
+  background: #F7F8FA;
+}
+
+.rankItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 15px;
+  color: var(--color-text-1, #1d2129);
+  padding: 12px 16px;
+}
+
+.rankDivider {
+  margin: 0;
+  padding: 0 !important;
+}
+
+.rankLabel {
+  font-weight: 600;
+  min-width: 28px;
+}
+
+.rankName {
+  flex: 1;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.rankScore {
+  font-weight: 600;
+  color: var(--color-text-2, #4e5969);
+  margin-left: auto;
+}
+
+.rankMessage {
   margin: 0;
   font-size: 14px;
   color: var(--color-text-3, #86909c);

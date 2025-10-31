@@ -2,7 +2,11 @@
 
 export type ContestModeId =
   | "qa"
+  | "qa-20"
+  | "qa-30"
+  | "qa-50"
   | "last-stand"
+  | "last-stand-group"
   | "speed-run"
   | "ocean-adventure"
   | "ultimate-challenge";
@@ -36,6 +40,7 @@ export type StandardQuestionType =
   | "boolean"
   | "fill"
   | "wordbank"
+  | "point-select"
   | "matching";
 
 export interface MatchingOption {
@@ -89,6 +94,15 @@ export type UltimatePhase =
   | "locked"
   | "answer";
 
+export interface HpPenaltyRecord {
+  hpBefore: number;
+  hpAfter: number;
+  amount: number;
+  timestamp: number;
+  questionId?: string;
+  source: "answer" | "judgement";
+}
+
 export interface QuizRuntimeState {
   mode: ContestModeId;
   question?: QuizQuestion;
@@ -101,6 +115,9 @@ export interface QuizRuntimeState {
   awaitingHost?: boolean;
   delegationTargetId?: string | null;
   phase?: UltimatePhase;
+  oceanEndReason?: "hp" | "timer" | "empty";
+  speedRunEndReason?: "complete" | "timer";
+  lastHpPenalty?: HpPenaltyRecord;
 }
 
 export interface QuizSubmissionStats {
@@ -126,11 +143,15 @@ export interface QuizSubmissionResult {
 }
 
 export interface QuizRuntimeControls {
-  submitAnswer: (value: string | string[]) => Promise<QuizSubmissionResult | undefined>;
+  submitAnswer: (
+    value: string | string[],
+    options?: { requestId?: string; timeoutMs?: number }
+  ) => Promise<QuizSubmissionResult | undefined>;
   requestNextQuestion: () => Promise<void>;
   reset: () => Promise<void>;
   startLocalTimer: () => void;
   stopLocalTimer: () => void;
+  recoverHp?: (targetHp: number) => void;
   applyHostJudgement?: (result: "correct" | "wrong") => void;
   delegateAnswerTo?: (targetId: string, options?: { isSelf?: boolean }) => void;
   triggerBuzzer?: () => void;

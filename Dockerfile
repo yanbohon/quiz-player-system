@@ -23,7 +23,7 @@ COPY . .
 
 # 设置构建参数（可在构建时通过 --build-arg 传入）
 ARG NEXT_PUBLIC_BASE_PATH=/xinsai-player
-ARG NEXT_PUBLIC_DEBUG_SHOW_ANSWER=true
+ARG NEXT_PUBLIC_DEBUG_SHOW_ANSWER=false
 
 # 设置环境变量（构建时）
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -40,7 +40,7 @@ WORKDIR /app
 
 # 设置运行时参数（可在构建时通过 --build-arg 传入）
 ARG NEXT_PUBLIC_BASE_PATH=/xinsai-player
-ARG NEXT_PUBLIC_DEBUG_SHOW_ANSWER=true
+ARG NEXT_PUBLIC_DEBUG_SHOW_ANSWER=false
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

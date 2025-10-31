@@ -1,9 +1,63 @@
-import { ContestModeMeta } from "./types";
+import { ContestModeId, ContestModeMeta } from "./types";
 
 export const CONTEST_MODES: Record<ContestModeMeta["id"], ContestModeMeta> = {
   qa: {
     id: "qa",
     name: "有问必答",
+    description:
+      "主持人通过 MQTT 逐题推送题目，选手实时作答并立即反馈。",
+    channel: "mqtt",
+    questionFlow: "push",
+    answerFlow: "immediate",
+    questionFormat: "standard",
+    features: {
+      hasHp: false,
+      requiresBuzzer: false,
+      allowsDelegation: false,
+      supportsTimer: false,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
+  "qa-20": {
+    id: "qa-20",
+    name: "有问必答(20)",
+    description:
+      "主持人通过 MQTT 逐题推送题目，选手实时作答并立即反馈。",
+    channel: "mqtt",
+    questionFlow: "push",
+    answerFlow: "immediate",
+    questionFormat: "standard",
+    features: {
+      hasHp: false,
+      requiresBuzzer: false,
+      allowsDelegation: false,
+      supportsTimer: false,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
+  "qa-30": {
+    id: "qa-30",
+    name: "有问必答(30)",
+    description:
+      "主持人通过 MQTT 逐题推送题目，选手实时作答并立即反馈。",
+    channel: "mqtt",
+    questionFlow: "push",
+    answerFlow: "immediate",
+    questionFormat: "standard",
+    features: {
+      hasHp: false,
+      requiresBuzzer: false,
+      allowsDelegation: false,
+      supportsTimer: false,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
+  "qa-50": {
+    id: "qa-50",
+    name: "有问必答(50)",
     description:
       "主持人通过 MQTT 逐题推送题目，选手实时作答并立即反馈。",
     channel: "mqtt",
@@ -31,6 +85,26 @@ export const CONTEST_MODES: Record<ContestModeMeta["id"], ContestModeMeta> = {
     features: {
       hasHp: true,
       initialHp: 3,
+      hpLossPerWrong: 1,
+      requiresBuzzer: false,
+      allowsDelegation: false,
+      supportsTimer: false,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
+  "last-stand-group": {
+    id: "last-stand-group",
+    name: "一站到底（分组）",
+    description:
+      "分组进行一站到底，每组仅有一次犯错机会，答错即淘汰并记录分组状态。",
+    channel: "mqtt",
+    questionFlow: "push",
+    answerFlow: "immediate",
+    questionFormat: "standard",
+    features: {
+      hasHp: true,
+      initialHp: 1,
       hpLossPerWrong: 1,
       requiresBuzzer: false,
       allowsDelegation: false,
@@ -99,3 +173,8 @@ export const CONTEST_MODES: Record<ContestModeMeta["id"], ContestModeMeta> = {
 
 export const DEFAULT_MODE = CONTEST_MODES.qa;
 
+export const QA_VARIANT_MODE_IDS: ContestModeId[] = ["qa", "qa-20", "qa-30", "qa-50"];
+
+export function isQaVariantMode(id: ContestModeId): boolean {
+  return QA_VARIANT_MODE_IDS.includes(id);
+}

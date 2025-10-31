@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Divider, Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
@@ -11,32 +11,17 @@ import { mqttService } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
 import { CONTEST_MODES } from "@/features/quiz/modes";
-import { resolveStatusFieldKey } from "@/features/quiz/status";
+import { resolveStatusFieldKey, resolveLastStandGroupStatusIndicator } from "@/features/quiz/status";
 import { resolveModeForStage } from "@/features/quiz/useControlCommands";
-import { MQTT_TOPICS } from "@/config/control";
+import { FUSION_API_CONFIG, MQTT_TOPICS } from "@/config/control";
 import LogoutIcon from "@/components/icons/logout.svg";
 import IconPicture from "@arco-design/mobile-react/esm/icon/IconPicture";
 import IconNotice from "@arco-design/mobile-react/esm/icon/IconNotice";
+import IconUserFill from "@arco-design/mobile-react/esm/icon/IconUserFill";
+import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
 import styles from "./page.module.css";
 
 import type { FusionEventSummary } from "@/lib/fusionClient";
-
-const STATION_FIELD_KEYS = ["台号", "台号ID", "station", "stationId"];
-
-function resolveStationNumber(
-  fields?: Record<string, unknown>
-): string | undefined {
-  if (!fields) return undefined;
-  for (const key of STATION_FIELD_KEYS) {
-    const value = fields[key];
-    if (value === undefined || value === null) continue;
-    const normalized = String(value).trim();
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
-}
 
 function resolvePosterUrl(event?: FusionEventSummary): string | undefined {
   if (!event) return undefined;
@@ -54,8 +39,118 @@ function resolvePosterUrl(event?: FusionEventSummary): string | undefined {
   );
 }
 
+function formatTeamDisplayName(name?: string): string {
+  if (!name) return "待匹配队伍";
+  const trimmed = name.trim();
+  if (!trimmed) return "待匹配队伍";
+  const normalized = trimmed.replace(/^\d+[\.\s]*/, "").trim();
+  return normalized || trimmed;
+}
+
+const FUSION_ASSET_ORIGIN = (() => {
+  try {
+    const url = new URL(FUSION_API_CONFIG.baseUrl);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return FUSION_API_CONFIG.baseUrl.replace(/\/+$/, "");
+  }
+})();
+
+function normalizeAttachmentUrl(raw?: string): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("//")) {
+    return `https:${trimmed}`;
+  }
+  const normalized = trimmed.replace(/^\/*/, "");
+  if (normalized.startsWith("assets/")) {
+    return `${FUSION_ASSET_ORIGIN}/${normalized}`;
+  }
+  if (normalized.startsWith("space/")) {
+    return `${FUSION_ASSET_ORIGIN}/assets/${normalized}`;
+  }
+  if (trimmed.startsWith("/assets/")) {
+    return `${FUSION_ASSET_ORIGIN}${trimmed}`;
+  }
+  if (trimmed.startsWith("/space/")) {
+    return `${FUSION_ASSET_ORIGIN}/assets${trimmed}`;
+  }
+  if (trimmed.startsWith("/")) {
+    return `${FUSION_ASSET_ORIGIN}${trimmed}`;
+  }
+  return `${FUSION_ASSET_ORIGIN}/${normalized}`;
+}
+
+function resolveSchoolBadgeUrl(
+  fields?: Record<string, unknown>
+): string | undefined {
+  if (!fields) return undefined;
+  const raw = fields["校徽"];
+  if (raw === undefined || raw === null) return undefined;
+
+  const extractFromCandidate = (candidate: unknown): string | undefined => {
+    if (!candidate || typeof candidate !== "object") return undefined;
+    const candidateMap = candidate as Record<string, unknown>;
+    const possibleKeys = [
+      "url",
+      "downloadUrl",
+      "previewUrl",
+      "thumbnailUrl",
+      "permalink",
+      "token",
+    ];
+    for (const key of possibleKeys) {
+      const url = normalizeAttachmentUrl(
+        typeof candidateMap[key] === "string" ? (candidateMap[key] as string) : undefined
+      );
+      if (url) return url;
+    }
+    return undefined;
+  };
+
+  const extractUrl = (input: unknown): string | undefined => {
+    if (!input) return undefined;
+
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        const url = extractFromCandidate(item);
+        if (url) return url;
+      }
+      return undefined;
+    }
+
+    if (typeof input === "object") {
+      return extractFromCandidate(input);
+    }
+
+    if (typeof input === "string") {
+      const trimmed = input.trim();
+      if (!trimmed) return undefined;
+      const normalized = normalizeAttachmentUrl(trimmed);
+      if (normalized) {
+        return normalized;
+      }
+      try {
+        const parsed = JSON.parse(trimmed);
+        return extractUrl(parsed);
+      } catch {
+        return undefined;
+      }
+    }
+
+    return undefined;
+  };
+
+  return extractUrl(raw);
+}
+
 export default function WaitingPage() {
   const router = useRouter();
+  const storeHydrated = useAppStoreHydrated();
   const { user, isAuthenticated, mqttConnected, logout } = useAppStore(
     useShallow((state) => ({
       user: state.user,
@@ -64,29 +159,45 @@ export default function WaitingPage() {
       logout: state.logout,
     }))
   );
-  const { selectedEvent, teamProfile, currentStage, scoreRecord, updateScoreStatus } = useQuizStore(
+  const {
+    selectedEvent,
+    teamProfile,
+    currentStage,
+    scoreRecord,
+    updateScoreStatus,
+    waitingTicketView,
+    rankStatus,
+    rankEntries,
+    rankError,
+  } = useQuizStore(
     useShallow((state) => ({
       selectedEvent: state.selectedEvent,
       teamProfile: state.teamProfile,
       currentStage: state.currentStage,
       scoreRecord: state.scoreRecord,
       updateScoreStatus: state.updateScoreStatus,
+      waitingTicketView: state.waitingTicketView,
+      rankStatus: state.rankStatus,
+      rankEntries: state.rankEntries,
+      rankError: state.rankError,
     }))
   );
   const statusResetRef = useRef<string | null>(null);
+  const [badgeLoadError, setBadgeLoadError] = useState(false);
 
   useEffect(() => {
+    if (!storeHydrated) return;
     if (!isAuthenticated) {
       Toast.info("请先登录",500);
       router.replace("/login");
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, router, storeHydrated]);
 
   useEffect(() => {
     if (!currentStage || !scoreRecord) return;
 
     const mode = resolveModeForStage(currentStage);
-    if (mode !== "last-stand") return;
+    if (mode !== "last-stand" && mode !== "last-stand-group") return;
 
     const scoreSheetId = currentStage.scoreSheetId;
     const recordId = scoreRecord.recordId;
@@ -95,12 +206,18 @@ export default function WaitingPage() {
     const statusFieldKey = resolveStatusFieldKey(scoreRecord.fields);
     if (!statusFieldKey) return;
 
-    const initialHp =
-      CONTEST_MODES["last-stand"].features.initialHp ?? 0;
-    if (!Number.isFinite(initialHp) || initialHp <= 0) return;
+    let statusValue: string | undefined;
+    if (mode === "last-stand-group") {
+      statusValue = resolveLastStandGroupStatusIndicator(currentStage.name);
+    } else {
+      const initialHp = CONTEST_MODES["last-stand"].features.initialHp ?? 0;
+      if (!Number.isFinite(initialHp) || initialHp <= 0) return;
+      statusValue = String(Math.max(0, Math.trunc(initialHp)));
+    }
 
-    const statusValue = String(Math.max(0, Math.trunc(initialHp)));
-    const cacheKey = `${recordId}:${statusValue}`;
+    if (!statusValue) return;
+
+    const cacheKey = `${recordId}:${mode}:${statusValue}`;
     if (statusResetRef.current === cacheKey) return;
 
     const currentStatus = scoreRecord.fields[statusFieldKey];
@@ -137,12 +254,32 @@ export default function WaitingPage() {
     };
   }, [currentStage, scoreRecord, updateScoreStatus]);
 
-  const getInitial = () => {
-    if (user?.name) {
-      return user.name.slice(0, 1).toUpperCase();
-    }
-    return "?";
-  };
+  const teamDisplayNameRaw =
+    typeof teamProfile?.displayName === "string"
+      ? teamProfile.displayName.trim()
+      : "";
+  const teamDisplayName = formatTeamDisplayName(teamProfile?.displayName);
+  const schoolBadgeUrl = useMemo(
+    () => resolveSchoolBadgeUrl(teamProfile?.fields),
+    [teamProfile?.fields]
+  );
+  useEffect(() => {
+    setBadgeLoadError(false);
+  }, [schoolBadgeUrl]);
+  const showBadgeImage = Boolean(schoolBadgeUrl && !badgeLoadError);
+  const schoolBadgeAlt = teamDisplayNameRaw
+    ? `${teamDisplayName}校徽`
+    : "学校校徽";
+
+  if (!storeHydrated) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.fallback}>
+          <Loading />
+        </div>
+      </div>
+    );
+  }
 
   const handleLogout = () => {
     if (user?.id && mqttService.isConnected()) {
@@ -157,29 +294,24 @@ export default function WaitingPage() {
   };
 
   const posterUrl = resolvePosterUrl(selectedEvent);
-  const stationNumber = resolveStationNumber(teamProfile?.fields);
-
   const ticketFields = [
-    {
-      key: "station",
-      label: "台号",
-      value: stationNumber ?? "待分配",
-      span: 2,
-    },
     {
       key: "account",
       label: "参赛账号",
       value: user?.id ?? "尚未登录",
+      span: 1,
     },
     {
       key: "team",
       label: "参赛队伍",
-      value: teamProfile?.displayName ?? "尚未匹配",
+      value: teamDisplayName,
+      span: 1,
     },
     {
       key: "event",
       label: "当前赛事",
-      value: selectedEvent?.name ?? "尚未选择",
+      value: selectedEvent?.name ?? "尚未匹配",
+      span: 2,
     },
     {
       key: "connection",
@@ -193,12 +325,15 @@ export default function WaitingPage() {
           {mqttConnected ? "连接成功" : "等待连接"}
         </span>
       ),
+      span: 2,
     },
   ];
 
+  const isRankView = waitingTicketView === "rank";
+
   return (
     <div className={styles.page}>
-      <ArcoClient fallback={<div className={styles.fallback}>加载中...</div>}>
+      <ArcoClient>
         <NavBar
           title="比赛等待区"
           leftContent={null}
@@ -242,40 +377,89 @@ export default function WaitingPage() {
             </div>
 
             <div className={styles.ticketContent}>
-              <div className={styles.identityRow}>
-                <div className={styles.avatar}>{getInitial()}</div>
-                <div className={styles.identityInfo}>
-                  <p className={styles.name}>{user?.name ?? "未登录选手"}</p>
-                  <span className={styles.identityMeta}>
-                    {teamProfile?.displayName ?? "待匹配队伍"}
-                  </span>
+              {isRankView ? (
+                <div className={styles.rankArea}>
+                  <p className={styles.rankTitle}>总分排行榜</p>
+                  {rankStatus === "loading" ? (
+                    <div className={styles.rankLoading}>
+                      <Loading type="dot" stroke={3} />
+                      <p className={styles.rankMessage}>正在获取排行榜...</p>
+                    </div>
+                  ) : rankStatus === "error" ? (
+                    <p className={styles.rankMessage}>
+                      {rankError ?? "排行榜数据获取失败，请稍后再试"}
+                    </p>
+                  ) : rankEntries.length === 0 ? (
+                    <p className={styles.rankMessage}>暂无排行榜数据</p>
+                  ) : (
+                    <div className={styles.rankList}>
+                      {rankEntries.map((entry, index) => (
+                        <div key={`${entry.id}-${index}`} className={styles.rankRow}>
+                          <div className={styles.rankItem}>
+                            <span className={styles.rankLabel}>{index + 1}.</span>
+                            <span className={styles.rankName}>{entry.schoolName}</span>
+                            <span className={styles.rankScore}>{entry.score}分</span>
+                          </div>
+                          {index < rankEntries.length - 1 ? (
+                            <Divider className={styles.rankDivider} />
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
+                  ) : (
+                    <>
+                      <div className={styles.identityRow}>
+                        <div
+                          className={
+                            showBadgeImage
+                              ? `${styles.avatar} ${styles.avatarHasImage}`
+                              : styles.avatar
+                          }
+                        >
+                          {showBadgeImage && schoolBadgeUrl ? (
+                            <Image
+                              src={schoolBadgeUrl}
+                              alt={schoolBadgeAlt}
+                              className={styles.avatarImage}
+                              onError={() => setBadgeLoadError(true)}
+                              loading="lazy"
+                              width={100}
+                              height={100}
+                            />
+                          ) : (
+                            <IconUserFill className={styles.avatarIcon} aria-hidden="true" />
+                          )}
+                        </div>
+                        <div className={styles.identityInfo}>
+                          <p className={styles.name}>{user?.name ?? "未登录选手"}</p>
+                          <span className={styles.identityMeta}>{teamDisplayName}</span>
+                        </div>
+                      </div>
 
-              <h2 className={styles.eventName}>
-                {selectedEvent?.name ?? "当前暂无赛事"}
-              </h2>
-
-              <div className={styles.infoGrid}>
-                {ticketFields.map(({ key, label, value, span }) => (
-                  <div
-                    key={key}
-                    className={`${styles.ticketField} ${
-                      span === 2 ? styles.ticketFieldFull : ""
-                    }`}
-                  >
-                    <span className={styles.fieldLabel}>{label}</span>
-                    <span className={styles.fieldValue}>{value}</span>
+                      <div className={styles.infoGrid}>
+                    {ticketFields.map(({ key, label, value, span }) => (
+                      <div
+                        key={key}
+                        className={`${styles.ticketField} ${
+                          span === 2 ? styles.ticketFieldFull : ""
+                        }`}
+                      >
+                        <span className={styles.fieldLabel}>{label}</span>
+                        <span className={styles.fieldValue}>{value}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
 
-              <div className={styles.ticketDivider} aria-hidden="true" />
+                  <div className={styles.ticketDivider} aria-hidden="true" />
 
-              <div className={styles.waitingArea}>
-                <Loading type="dot" stroke={3} />
-                <p className={styles.waitingText}>等待开始比赛...</p>
-              </div>
+                  <div className={styles.waitingArea}>
+                    <Loading type="dot" stroke={3} />
+                    <p className={styles.waitingText}>等待开始环节...</p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

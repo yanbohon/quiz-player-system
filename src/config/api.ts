@@ -9,7 +9,7 @@ export const API_CONFIG = {
   // 项目主要使用：tihaiBaseUrl（题海抢题）和 FUSION_API_CONFIG（飞书多维表格）
   baseUrl: normalizeBaseUrl(
     process.env.NEXT_PUBLIC_API_BASE_URL,
-    "https://api.ohvfx.com/api"
+    ""
   ),
   tihaiBaseUrl: normalizeBaseUrl(
     process.env.NEXT_PUBLIC_TIHAI_API_BASE,

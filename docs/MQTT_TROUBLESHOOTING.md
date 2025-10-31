@@ -65,15 +65,16 @@ All MQTT configuration is handled through environment variables:
 
 - MQTT connection errors are caught and logged but don't crash the app
 - The app continues to function without real-time features if MQTT fails
-- Automatic reconnection attempts (up to 5 times) with 5-second intervals
+- Automatic reconnection attempts with 5-second intervals
 - Clear console warnings when MQTT is unavailable
 
 ### Timeouts
 
-- **Connection timeout**: 30 seconds
+- **Connection timeout**: 20 seconds
 - **Reconnect period**: 5 seconds between attempts
-- **Keepalive**: 60 seconds
-- **Total connection timeout**: 35 seconds (for safety)
+- **Keepalive**: 45 seconds
+- **Heartbeat publish interval**: ~22.5 seconds (half of keepalive)
+- **Total connection timeout**: ~25 seconds (for safety)
 
 ### Graceful Degradation
 

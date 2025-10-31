@@ -7,26 +7,28 @@ import { Toast } from "@/lib/arco";
 import { API_ENDPOINTS } from "@/constants";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
-import { ApiError } from "@/lib/api/client";
-import { submitGrabbedAnswer } from "@/lib/fusionClient";
+import { submitGrabbedAnswer, QuestionPoolEmptyError } from "@/lib/fusionClient";
+import { showQuizApiErrorToast } from "@/lib/quizApiError";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
-import { CONTEST_MODES, DEFAULT_MODE } from "./modes";
+import { CONTEST_MODES, DEFAULT_MODE, isQaVariantMode } from "./modes";
 import {
   ContestModeId,
   ContestModeMeta,
   CustomOceanQuestion,
   MatchingOption,
+  HpPenaltyRecord,
   QuizQuestion,
   QuizSubmissionResult,
   QuizRuntime,
   QuizRuntimeState,
   StandardQuestion,
+  StandardQuestionOption,
   StandardQuestionType,
 } from "./types";
 
 type ModeIdInput = ContestModeId | string | null | undefined;
 
-const SPEED_RUN_TIME_LIMIT = 5 * 60; // 5 minutes
+const SPEED_RUN_TIME_LIMIT = 3 * 60; // 3 minutes
 const OCEAN_TIME_LIMIT = 5 * 60; // 5 minutes
 
 function resolveMode(id: ModeIdInput): ContestModeMeta {
@@ -48,6 +50,9 @@ function createInitialState(meta: ContestModeMeta): QuizRuntimeState {
     awaitingHost: meta.questionFlow !== "local",
     delegationTargetId: null,
     phase: meta.id === "ultimate-challenge" ? "waiting" : undefined,
+    oceanEndReason: undefined,
+    speedRunEndReason: undefined,
+    lastHpPenalty: undefined,
   };
 }
 
@@ -78,6 +83,7 @@ function mapQuestionType(type?: string): StandardQuestionType {
     case "填空":
     case "填空题":
       return "fill";
+    case "select-word-fill":
     case "wordbank":
     case "word-bank":
     case "word-bank-fill":
@@ -85,10 +91,23 @@ function mapQuestionType(type?: string): StandardQuestionType {
     case "pick":
     case "pick-fill":
     case "选词填空":
-    case "点选填空":
     case "选词填空题":
-    case "点选题":
       return "wordbank";
+    case "point-select":
+    case "pointselect":
+    case "point":
+    case "tap-select":
+    case "tap":
+    case "dot-select":
+    case "pointing":
+    case "spot-select":
+    case "选字组词":
+    case "选字":
+    case "点选":
+    case "点选题":
+    case "组词题":
+    case "组词":
+      return "point-select";
     case "matching":
     case "match":
     case "pairing":
@@ -107,6 +126,128 @@ function mapQuestionType(type?: string): StandardQuestionType {
   }
 }
 
+function splitPointSelectTokens(source: string): string[] {
+  if (!source) return [];
+  return source
+    .split(/\r?\n|[、，,;；/／]+/u)
+    .map((item) =>
+      item
+        .replace(/[“”"'‘’]/g, "")
+        .replace(/\s+/g, "")
+        .trim()
+    )
+    .filter((item) => item.length > 0);
+}
+
+function buildPointSelectOptions(
+  question: NormalizedQuestion
+): StandardQuestionOption[] {
+  const tokens: string[] = [];
+
+  const pushToken = (raw: string | undefined | null) => {
+    if (typeof raw !== "string") return;
+    const token = raw.trim();
+    if (
+      !token ||
+      tokens.includes(token) ||
+      /^[A-Z]$/i.test(token) ||
+      /^选项\d+$/.test(token)
+    ) {
+      return;
+    }
+    tokens.push(token);
+  };
+
+  const ingestSource = (source: unknown) => {
+    if (!source) return;
+    if (typeof source === "string") {
+      splitPointSelectTokens(source).forEach(pushToken);
+      return;
+    }
+    if (Array.isArray(source)) {
+      source.forEach((item) => {
+        if (typeof item === "string") {
+          splitPointSelectTokens(item).forEach(pushToken);
+        } else if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          ingestSource(record.value);
+          ingestSource(record.text);
+          ingestSource(record.label);
+        }
+      });
+      return;
+    }
+    if (typeof source === "object") {
+      digestRawOptionRecord(source as Record<string, unknown>);
+    }
+  };
+
+  function digestRawOptionRecord(record: Record<string, unknown>) {
+    if (!record) return;
+    const candidateKeys = [
+      "value",
+      "text",
+      "label",
+      "content",
+      "option",
+      "word",
+      "词语",
+      "选项",
+    ];
+    candidateKeys.forEach((key) => {
+      const entry = record[key];
+      if (typeof entry === "string") {
+        splitPointSelectTokens(entry).forEach(pushToken);
+      } else if (Array.isArray(entry)) {
+        entry.forEach((item) => {
+          if (typeof item === "string") {
+            splitPointSelectTokens(item).forEach(pushToken);
+          }
+        });
+      }
+    });
+  }
+
+  const raw = question.raw;
+  if (raw && typeof raw === "object") {
+    const rawRecord = raw as Record<string, unknown>;
+    const rawOptions =
+      rawRecord.options ??
+      rawRecord.choices ??
+      rawRecord.选项 ??
+      rawRecord.词库 ??
+      rawRecord.words;
+
+    ingestSource(rawOptions);
+
+    const additionalKeys = Object.keys(rawRecord).filter((key) =>
+      /^option/i.test(key)
+    );
+    additionalKeys.forEach((key) => ingestSource(rawRecord[key]));
+  }
+
+  for (const option of question.options) {
+    if (option.text) {
+      ingestSource(option.text);
+    }
+    if (option.value) {
+      ingestSource(option.value);
+    }
+  }
+
+  if (tokens.length === 0) {
+    return question.options.map((option, index) => ({
+      value: option.value || String.fromCharCode(65 + index),
+      label: option.text || option.value || `选项${index + 1}`,
+    }));
+  }
+
+  return tokens.map((token) => ({
+    value: token,
+    label: token,
+  }));
+}
+
 function normalizedToStandardQuestion(
   question: NormalizedQuestion
 ): StandardQuestion {
@@ -122,6 +263,22 @@ function normalizedToStandardQuestion(
   }
 
   const mappedType = mapQuestionType(question.type);
+  if (mappedType === "point-select") {
+    const options = buildPointSelectOptions(question);
+    const joinedAnswer =
+      answers.length === 0
+        ? undefined
+        : answers.every((item) => item && item.length === 1)
+        ? answers.join("")
+        : answers[0] ?? "";
+    return {
+      id: question.id,
+      title: question.content,
+      type: "point-select",
+      options,
+      correctAnswer: joinedAnswer || undefined,
+    };
+  }
   if (mappedType === "matching") {
     const config = buildMatchingQuestion(question);
     return {
@@ -446,6 +603,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     isLoading: quizLoading,
     waitingForStageStart,
     loadQuestions,
+    loadStageQuestionsFromFusion,
     grabNextQuestion,
     setCurrentQuestionIndex,
     oceanRemainingCount,
@@ -457,6 +615,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       isLoading: state.isLoading,
       waitingForStageStart: state.waitingForStageStart,
       loadQuestions: state.loadQuestions,
+      loadStageQuestionsFromFusion: state.loadStageQuestionsFromFusion,
       grabNextQuestion: state.grabNextQuestion,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
       oceanRemainingCount: state.oceanRemainingCount,
@@ -499,13 +658,30 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }));
   }, [resetTimers]);
 
-  const handleQuestionPoolEmpty = useCallback(() => {
-    if (emptyPoolHandledRef.current) return;
-    emptyPoolHandledRef.current = true;
-    Toast.info("题库已空");
-    stopAll();
-    router.replace("/waiting");
-  }, [router, stopAll]);
+  const handleQuestionPoolEmpty = useCallback(
+    (options?: { notify?: boolean; message?: string }) => {
+      if (emptyPoolHandledRef.current) return;
+      emptyPoolHandledRef.current = true;
+      if (options?.notify !== false) {
+        const message =
+          options?.message ??
+          "【题目耗尽】题库已清空，请联系主持人确认下一步。";
+        Toast.error(message);
+      }
+      stopAll();
+      if (meta.id !== "ocean-adventure") {
+        router.replace("/waiting");
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        awaitingHost: true,
+        oceanEndReason: prev.oceanEndReason ?? "empty",
+      }));
+      setAppCurrentQuestion(null);
+    },
+    [meta.id, router, setAppCurrentQuestion, stopAll]
+  );
 
   useEffect(() => {
     emptyPoolHandledRef.current = false;
@@ -552,13 +728,13 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
             meta.id === "ocean-adventure" && meta.features.hasHp;
           stopAll();
           setState((prev) => {
-            if (
-              prev.timeRemaining === 0 &&
-              prev.timeElapsed === elapsedSeconds &&
-              (!shouldLockOceanResult || (prev.hp ?? 0) === 0)
-            ) {
-              return prev;
-            }
+            const nextEndReason = shouldLockOceanResult
+              ? prev.oceanEndReason ?? "timer"
+              : prev.oceanEndReason;
+            const nextSpeedRunReason =
+              meta.id === "speed-run"
+                ? prev.speedRunEndReason ?? "timer"
+                : prev.speedRunEndReason;
             return {
               ...prev,
               timeRemaining: 0,
@@ -566,6 +742,8 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
               answeringEnabled: false,
               hp: shouldLockOceanResult ? 0 : prev.hp,
               awaitingHost: shouldLockOceanResult ? true : prev.awaitingHost,
+              oceanEndReason: nextEndReason,
+              speedRunEndReason: nextSpeedRunReason,
             };
           });
           return;
@@ -606,9 +784,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       total: number,
       options?: { hold?: boolean }
     ) => {
+      const isSpeedRun = meta.id === "speed-run";
       const shouldHold =
         options?.hold ??
-        (meta.questionFlow === "push" && !questionGateOpened);
+        ((meta.questionFlow === "push" || isSpeedRun) && !questionGateOpened);
       const isUltimate = meta.id === "ultimate-challenge";
       const hasHp = meta.features.hasHp;
       const remainingHp = hasHp
@@ -631,13 +810,21 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         awaitingHost:
           meta.questionFlow !== "local"
             ? shouldHold || !effectiveQuestion
-            : false,
+            : isSpeedRun
+              ? shouldHold
+              : false,
         delegationTargetId: null,
         phase: isUltimate
           ? effectiveQuestion
             ? "buzz"
             : "waiting"
           : prev.phase,
+        oceanEndReason:
+          meta.id === "ocean-adventure" && effectiveQuestion
+            ? undefined
+            : prev.oceanEndReason,
+        speedRunEndReason:
+          isSpeedRun && effectiveQuestion ? undefined : prev.speedRunEndReason,
       }));
 
       if (!effectiveQuestion) {
@@ -708,7 +895,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
           : -1
         : Math.min(Math.max(storeCurrentIndex, 0), Math.max(0, fetchedCount - 1));
 
-    const holdQuestion = meta.questionFlow === "push" && !questionGateOpened;
+    const holdQuestion =
+      (meta.questionFlow === "push" || meta.id === "speed-run") &&
+      !questionGateOpened;
 
     const nextQuestion =
       index >= 0 && index < quizQuestions.length ? quizQuestions[index] : undefined;
@@ -743,6 +932,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
 
   useEffect(() => {
     if (meta.id === "speed-run") {
+      if (!questionGateOpened) {
+        timerInitializedRef.current = false;
+        return;
+      }
       if (quizQuestions.length > 0 && !timerInitializedRef.current) {
         timerInitializedRef.current = true;
         startGlobalTimer(SPEED_RUN_TIME_LIMIT);
@@ -759,9 +952,22 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
 
     timerInitializedRef.current = false;
-  }, [meta.id, quizQuestions.length, startGlobalTimer]);
+  }, [meta.id, questionGateOpened, quizQuestions.length, startGlobalTimer]);
 
   const loadModeQuestions = useCallback(async () => {
+    if (meta.id === "speed-run") {
+      try {
+        await loadStageQuestionsFromFusion();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "题目加载失败";
+        console.error("争分夺秒题目加载失败", error);
+        Toast.error(message);
+        router.replace("/waiting");
+      }
+      return;
+    }
+
     const endpoint = `${API_ENDPOINTS.QUESTIONS}?mode=${encodeURIComponent(meta.id)}`;
     try {
       await loadQuestions(endpoint, "default");
@@ -769,26 +975,25 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       console.error("加载题目列表失败", error);
       Toast.error("题目加载失败");
     }
-  }, [loadQuestions, meta.id]);
+  }, [loadQuestions, loadStageQuestionsFromFusion, meta.id, router]);
 
   const fetchNextGrabQuestion = useCallback(async () => {
     if (!userId) return;
     try {
       const question = await grabNextQuestion(userId);
       if (!question) {
-        handleQuestionPoolEmpty();
+        handleQuestionPoolEmpty({
+          notify: true,
+        });
       }
     } catch (error) {
-      if (
-        error instanceof ApiError &&
-        typeof error.message === "string" &&
-        error.message.includes("题库已空")
-      ) {
-        handleQuestionPoolEmpty();
+      if (error instanceof QuestionPoolEmptyError) {
+        handleQuestionPoolEmpty({ notify: false });
+        showQuizApiErrorToast(error, "获取题目");
         return;
       }
       console.error("题海遨游取题失败", error);
-      Toast.error("获取题目失败");
+      showQuizApiErrorToast(error, "获取题目");
     }
   }, [grabNextQuestion, handleQuestionPoolEmpty, userId]);
 
@@ -844,6 +1049,24 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         return correct.every((item, idx) => item === value[idx]);
       }
 
+      if (questionType === "point-select") {
+        const normalizeToken = (input: string | undefined): string =>
+          input ? input.replace(/\s+/g, "").trim() : "";
+        const correctJoined = Array.isArray(correct)
+          ? normalizeToken(correct.join(""))
+          : normalizeToken(typeof correct === "string" ? correct : undefined);
+        if (!correctJoined) {
+          return undefined;
+        }
+        const valueJoined = Array.isArray(value)
+          ? normalizeToken(value.join(""))
+          : normalizeToken(typeof value === "string" ? value : undefined);
+        if (!valueJoined) {
+          return false;
+        }
+        return valueJoined === correctJoined;
+      }
+
       if (questionType === "multiple" || questionType === "indeterminate") {
         const correctValues = Array.isArray(correct) ? correct : [correct];
         const valueArray = Array.isArray(value)
@@ -888,7 +1111,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   }, []);
 
   const submitAnswer = useCallback(
-    async (value: string | string[]): Promise<QuizSubmissionResult | undefined> => {
+    async (
+      value: string | string[],
+      options?: { requestId?: string; timeoutMs?: number }
+    ): Promise<QuizSubmissionResult | undefined> => {
       const currentQuestion = currentQuestionRef.current;
       const currentIndex = questionIndexRef.current;
 
@@ -908,6 +1134,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
           userId,
           questionId: currentQuestion.questionKey,
           answer: answerPayload,
+          timeoutMs: options?.timeoutMs,
         });
       }
 
@@ -949,22 +1176,56 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         },
       });
 
-      if (meta.features.hasHp && isCorrect === false) {
-        wrongCountRef.current += 1;
-        const currentHp =
-          hpBeforeAnswer ?? state.hp ?? meta.features.initialHp ?? 0;
-        const nextHp = Math.max(
-          currentHp - (meta.features.hpLossPerWrong ?? 1),
-          0
-        );
-        hpAfterAnswer = nextHp;
-        setState((prev) => ({
-          ...prev,
-          hp: nextHp,
-          answeringEnabled: nextHp > 0 ? prev.answeringEnabled : false,
-        }));
-        if (nextHp <= 0) {
-          stopAll();
+      if (meta.features.hasHp) {
+        if (isCorrect === false) {
+          wrongCountRef.current += 1;
+          const deduction = Math.max(meta.features.hpLossPerWrong ?? 1, 0);
+          const currentHp =
+            hpBeforeAnswer ?? state.hp ?? meta.features.initialHp ?? 0;
+          const nextHp = Math.max(currentHp - deduction, 0);
+          hpAfterAnswer = nextHp;
+          const penaltyQuestionId = isStandardQuestion(currentQuestion)
+            ? currentQuestion.id
+            : isOceanQuestion(currentQuestion)
+            ? currentQuestion.questionKey
+            : undefined;
+          setState((prev) => {
+            const baseHp = Math.trunc(prev.hp ?? meta.features.initialHp ?? 0);
+            const computedNext = Math.max(baseHp - deduction, 0);
+            const amount = Math.max(baseHp - computedNext, 0);
+            const penaltyRecord: HpPenaltyRecord | undefined =
+              amount > 0
+                ? {
+                    amount,
+                    hpBefore: baseHp,
+                    hpAfter: computedNext,
+                    timestamp: Date.now(),
+                    questionId: penaltyQuestionId,
+                    source: "answer",
+                  }
+                : prev.lastHpPenalty;
+            return {
+              ...prev,
+              hp: computedNext,
+              answeringEnabled: computedNext > 0 ? prev.answeringEnabled : false,
+              oceanEndReason:
+                meta.id === "ocean-adventure" && computedNext <= 0
+                  ? prev.oceanEndReason ?? "hp"
+                  : prev.oceanEndReason,
+              lastHpPenalty: penaltyRecord,
+            };
+          });
+          if (nextHp <= 0) {
+            stopAll();
+          }
+        } else {
+          setState((prev) => {
+            if (!prev.lastHpPenalty) return prev;
+            return {
+              ...prev,
+              lastHpPenalty: undefined,
+            };
+          });
         }
       }
 
@@ -983,7 +1244,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         stats: oceanSubmission?.stats,
       };
 
-      if (meta.id === "qa" || meta.id === "last-stand") {
+      if (isQaVariantMode(meta.id) || meta.id === "last-stand" || meta.id === "last-stand-group") {
         setState((prev) => ({
           ...prev,
           awaitingHost: true,
@@ -1007,6 +1268,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         const nextIndex = currentIndex + 1;
         if (nextIndex >= questionListRef.current.length) {
           stopAll();
+          setState((prev) => ({
+            ...prev,
+            speedRunEndReason: prev.speedRunEndReason ?? "complete",
+          }));
           return submissionOutcome;
         }
         setCurrentQuestionIndex(nextIndex);
@@ -1078,20 +1343,73 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const applyHostJudgement = useCallback(
     (result: "correct" | "wrong") => {
       if (!meta.features.hasHp) return;
-      if (result === "correct") return;
+      if (result === "correct") {
+        setState((prev) => {
+          if (!prev.lastHpPenalty) return prev;
+          return {
+            ...prev,
+            lastHpPenalty: undefined,
+          };
+        });
+        return;
+      }
+      const latestQuestion = currentQuestionRef.current;
+      const deduction = Math.max(meta.features.hpLossPerWrong ?? 1, 0);
       setState((prev) => {
-        const nextHp =
-          (prev.hp ?? meta.features.initialHp ?? 0) -
-          (meta.features.hpLossPerWrong ?? 1);
-        const clamped = Math.max(nextHp, 0);
+        const baseHp = Math.trunc(prev.hp ?? meta.features.initialHp ?? 0);
+        const nextHp = Math.max(baseHp - deduction, 0);
+        const amount = Math.max(baseHp - nextHp, 0);
+        const penaltyRecord: HpPenaltyRecord | undefined =
+          amount > 0
+            ? {
+                amount,
+                hpBefore: baseHp,
+                hpAfter: nextHp,
+                timestamp: Date.now(),
+                questionId: isStandardQuestion(latestQuestion)
+                  ? latestQuestion.id
+                  : isOceanQuestion(latestQuestion)
+                  ? latestQuestion.questionKey
+                  : undefined,
+                source: "judgement",
+              }
+            : prev.lastHpPenalty;
         return {
           ...prev,
-          hp: clamped,
-          answeringEnabled: clamped > 0 && prev.answeringEnabled,
+          hp: nextHp,
+          answeringEnabled: nextHp > 0 && prev.answeringEnabled,
+          lastHpPenalty: penaltyRecord,
         };
       });
     },
     [meta.features.hasHp, meta.features.hpLossPerWrong, meta.features.initialHp]
+  );
+
+  const recoverHp = useCallback(
+    (targetHp: number) => {
+      if (!meta.features.hasHp) return;
+      const maxHp = Math.max(0, Math.trunc(meta.features.initialHp ?? 0));
+      const normalizedTarget = Math.trunc(targetHp);
+      const clamped = Math.max(0, Math.min(normalizedTarget, maxHp));
+      setState((prev) => {
+        const currentHp = Math.trunc(prev.hp ?? maxHp);
+        if (currentHp === clamped && prev.answeringEnabled) {
+          return prev;
+        }
+        const penaltyAfter = prev.lastHpPenalty?.hpAfter;
+        const shouldClearPenalty =
+          clamped > currentHp &&
+          typeof penaltyAfter === "number" &&
+          Math.trunc(penaltyAfter) === currentHp;
+        return {
+          ...prev,
+          hp: clamped,
+          answeringEnabled: clamped > 0,
+          lastHpPenalty: shouldClearPenalty ? undefined : prev.lastHpPenalty,
+        };
+      });
+    },
+    [meta.features.hasHp, meta.features.initialHp]
   );
 
   const delegateAnswerTo = useCallback(
@@ -1201,6 +1519,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       reset,
       startLocalTimer,
       stopLocalTimer,
+      recoverHp: meta.features.hasHp ? recoverHp : undefined,
       applyHostJudgement: meta.features.hasHp ? applyHostJudgement : undefined,
       delegateAnswerTo: meta.features.allowsDelegation ? delegateAnswerTo : undefined,
       triggerBuzzer: meta.features.requiresBuzzer ? triggerBuzzer : undefined,

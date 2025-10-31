@@ -8,6 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
 import { Toast } from "@/lib/arco";
 import { useAppStore } from "@/store/useAppStore";
+import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
 import styles from "./page.module.css";
 
 const TOTAL_STATIONS = 20;
@@ -16,17 +17,29 @@ const STATION_NUMBERS = Array.from({ length: TOTAL_STATIONS }, (_, index) => ind
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, setUser, logout } = useAppStore(
+  const storeHydrated = useAppStoreHydrated();
+  const { user, isAuthenticated, setUser } = useAppStore(
     useShallow((state) => ({
       user: state.user,
+      isAuthenticated: state.isAuthenticated,
       setUser: state.setUser,
-      logout: state.logout,
     }))
   );
 
   useEffect(() => {
-    logout();
-  }, [logout]);
+    if (!storeHydrated) return;
+    if (isAuthenticated && user) {
+      router.replace("/waiting");
+    }
+  }, [isAuthenticated, router, storeHydrated, user]);
+
+  if (!storeHydrated || (isAuthenticated && user)) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.fallback}>页面加载中...</div>
+      </div>
+    );
+  }
 
   const activeStation = (() => {
     if (!user?.id || !/^\d+$/.test(user.id)) {
@@ -48,7 +61,7 @@ export default function LoginPage() {
 
   return (
     <div className={styles.page}>
-      <ArcoClient fallback={<div className={styles.fallback}>页面加载中...</div>}>
+      <ArcoClient>
         <NavBar title="选手登录" leftContent={null} />
 
         <div className={styles.body}>

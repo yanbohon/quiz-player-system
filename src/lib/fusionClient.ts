@@ -75,35 +75,334 @@ interface SubmitGrabAnswerResponse {
   [key: string]: unknown;
 }
 
+type FusionFetchOptions = RequestInit & {
+  timeoutMs?: number;
+  retry?: number;
+  retryDelayMs?: number;
+};
+
+const SUBMIT_MIN_INTERVAL_MS = 1000;
+const SUBMIT_MAX_ATTEMPTS = 3;
+const SUBMIT_RETRY_DELAY_MS = 600;
+const DEFAULT_FETCH_TIMEOUT_MS = 5000;
+const DEFAULT_FETCH_RETRY_DELAY_MS = 300;
+
+const GRAB_MAX_ATTEMPTS = 3;
+const GRAB_RETRY_DELAY_MS = 1000;
+const GRAB_LOCK_TIMEOUT_MS = 2000;
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+export type QuizApiErrorType = "network" | "business" | "timeout";
+
+export class QuizApiError extends Error {
+  constructor(
+    public readonly type: QuizApiErrorType,
+    message: string,
+    public readonly suggestion: string,
+    public readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = "QuizApiError";
+  }
+}
+
+export class QuestionPoolEmptyError extends QuizApiError {
+  constructor(public readonly remainingCount?: number) {
+    super(
+      "business",
+      "题目已经耗尽，无法继续抢题",
+      "请联系主持人确认题库状态或等待下一轮",
+      remainingCount
+    );
+    this.name = "QuestionPoolEmptyError";
+  }
+}
+
+export class LockTimeoutError extends QuizApiError {
+  constructor() {
+    super(
+      "timeout",
+      "请求等待超时，可能存在其他抢题操作正在进行",
+      "请稍后重试，如持续出现请联系工作人员"
+    );
+    this.name = "LockTimeoutError";
+  }
+}
+
+function toQuizApiError(error: unknown): QuizApiError {
+  if (error instanceof QuizApiError) {
+    return error;
+  }
+  if (error instanceof ApiError) {
+    return new QuizApiError(
+      "business",
+      error.message || "服务返回错误",
+      "请联系工作人员或稍后重试",
+      error
+    );
+  }
+  if (error instanceof TypeError) {
+    return new QuizApiError(
+      "network",
+      "网络异常，未能连接到服务器",
+      "请检查网络连接后重试",
+      error
+    );
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return new QuizApiError(
+      "network",
+      "请求被中断",
+      "请确认网络状况后重新尝试",
+      error
+    );
+  }
+  return new QuizApiError(
+    "business",
+    error instanceof Error ? error.message : "未知错误",
+    "请联系工作人员或稍后重试",
+    error
+  );
+}
+
+type GrabQuestionResult = {
+  question?: NormalizedQuestion;
+  remainingCount?: number;
+};
+
+async function fetchGrabbedQuestionRaw(userId: string): Promise<GrabQuestionResult> {
+  const response = await fetch(resolveTihaiUrl("/grab-with-details"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ userId }),
+  });
+
+  let data: GrabQuestionResponse | undefined;
+  try {
+    data = await response.json();
+  } catch {
+    data = undefined;
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data?.message === "string" && data.message.trim()
+        ? data.message
+        : response.statusText || "请求失败";
+    throw new ApiError(response.status, message, data);
+  }
+
+  if (data?.success === false) {
+    const message =
+      typeof data.message === "string" && data.message.trim()
+        ? data.message
+        : "题海取题失败";
+    throw new ApiError(response.status, message, data);
+  }
+
+  const normalized = normalizeQuestion(data, "tihai");
+  const question = normalized[0];
+  const remainingCount =
+    typeof data?.remainingCount === "number" ? data.remainingCount : undefined;
+  if (!question) {
+    throw new QuestionPoolEmptyError(remainingCount);
+  }
+  return { question, remainingCount };
+}
+
+async function submitGrabbedAnswerRaw(params: {
+  userId: string;
+  questionId: string;
+  answer: string | string[];
+  timeoutMs?: number;
+}): Promise<SubmitGrabAnswerResponse> {
+  const payload = {
+    userId: params.userId,
+    questionId: params.questionId,
+    answer: params.answer,
+  };
+
+  const controller =
+    typeof AbortController !== "undefined" &&
+    typeof params.timeoutMs === "number" &&
+    params.timeoutMs > 0
+      ? new AbortController()
+      : undefined;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  if (controller && typeof params.timeoutMs === "number") {
+    timeoutHandle = setTimeout(() => {
+      controller.abort();
+    }, params.timeoutMs);
+  }
+
+  try {
+    const response = await fetch(resolveTihaiUrl("/submit-answer"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller?.signal,
+    });
+
+    let data: SubmitGrabAnswerResponse | undefined;
+    try {
+      data = await response.json();
+    } catch {
+      data = undefined;
+    }
+
+    if (!response.ok) {
+      const message =
+        typeof data?.message === "string" && data.message.trim()
+          ? data.message
+          : response.statusText || "提交答案失败";
+      throw new ApiError(response.status, message, data);
+    }
+
+    if (data?.success === false) {
+      const message =
+        typeof data.message === "string" && data.message.trim()
+          ? data.message
+          : "题海答题提交失败";
+      throw new ApiError(response.status, message, data);
+    }
+
+    return data ?? { success: true };
+  } catch (error) {
+    if (error instanceof ApiError || error instanceof QuizApiError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new QuizApiError(
+        "timeout",
+        "提交等待超时",
+        "请检查网络连接后重试",
+        error
+      );
+    }
+    throw new QuizApiError(
+      "network",
+      error instanceof Error ? error.message || "提交答案失败" : "提交答案失败",
+      "请检查网络连接后重试",
+      error
+    );
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 export async function fusionFetch<T>(
   path: string,
-  init?: RequestInit
+  init?: FusionFetchOptions
 ): Promise<T> {
   const base = FUSION_API_CONFIG.baseUrl.replace(/\/$/, "");
   const url = path.startsWith("http")
     ? path
     : `${base}${path.startsWith("/") ? path : `/${path}`}`;
 
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${FUSION_API_CONFIG.token}`,
-      ...init?.headers,
-    },
-  });
+  const {
+    timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
+    retry = 0,
+    retryDelayMs = DEFAULT_FETCH_RETRY_DELAY_MS,
+    ...restInit
+  } = init ?? {};
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(response.status, message);
+  const execute = async (): Promise<T> => {
+    const shouldUseController =
+      timeoutMs > 0 && typeof AbortController !== "undefined" && !restInit.signal;
+    const controller = shouldUseController ? new AbortController() : undefined;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+    if (controller && timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
+    }
+
+    try {
+      const response = await fetch(url, {
+        ...restInit,
+        signal: controller?.signal ?? restInit.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${FUSION_API_CONFIG.token}`,
+          ...(restInit.headers ?? {}),
+        },
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new ApiError(response.status, message);
+      }
+
+      const json: FusionResponse<T> = await response.json();
+      if (!json.success) {
+        throw new ApiError(json.code ?? -1, json.message ?? "Fusion API Error", json);
+      }
+
+      return json.data;
+    } catch (error) {
+      if (error instanceof ApiError || error instanceof QuizApiError) {
+        throw error;
+      }
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new QuizApiError(
+          "timeout",
+          "请求等待超时",
+          "请检查网络连接后重试",
+          error
+        );
+      }
+      throw new QuizApiError(
+        "network",
+        error instanceof Error ? error.message || "网络异常" : "网络异常",
+        "请检查网络连接后重试",
+        error
+      );
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  };
+
+  let attempt = 0;
+  let lastError: unknown;
+
+  while (attempt <= retry) {
+    try {
+      return await execute();
+    } catch (error) {
+      lastError = error;
+      if (
+        attempt < retry &&
+        error instanceof QuizApiError &&
+        (error.type === "network" || error.type === "timeout")
+      ) {
+        if (retryDelayMs > 0) {
+          await delay(retryDelayMs);
+        }
+        attempt += 1;
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const json: FusionResponse<T> = await response.json();
-  if (!json.success) {
-    throw new ApiError(json.code ?? -1, json.message ?? "Fusion API Error", json);
+  if (lastError instanceof Error) {
+    throw lastError;
   }
-
-  return json.data;
+  throw new Error("Fusion request failed");
 }
 
 export async function fetchFusionEvents(): Promise<FusionEventSummary[]> {
@@ -150,93 +449,118 @@ export async function fetchNormalizedDatasheetQuestions(
   return normalizeQuestion(wrapped, "default");
 }
 
-export async function fetchGrabbedQuestion(
-  userId: string
-): Promise<{ question?: NormalizedQuestion; remainingCount?: number }> {
-  const response = await fetch(
-    resolveTihaiUrl("/grab-with-details"),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ userId }),
-    }
-  );
-
-  let data: GrabQuestionResponse | undefined;
-  try {
-    data = await response.json();
-  } catch {
-    data = undefined;
-  }
-
-  if (!response.ok) {
-    const message =
-      typeof data?.message === "string" && data.message.trim()
-        ? data.message
-        : response.statusText || "请求失败";
-    throw new ApiError(response.status, message, data);
-  }
-
-  if (data?.success === false) {
-    const message =
-      typeof data.message === "string" && data.message.trim()
-        ? data.message
-        : "题海取题失败";
-    throw new ApiError(response.status, message, data);
-  }
-
-  const normalized = normalizeQuestion(data, "tihai");
-  const question = normalized[0];
-  const remainingCount =
-    typeof data?.remainingCount === "number" ? data.remainingCount : undefined;
-  return { question, remainingCount };
-}
+let submitChain: Promise<SubmitGrabAnswerResponse> = Promise.resolve(
+  { success: true } as SubmitGrabAnswerResponse
+);
+let submitLastAttemptAt = 0;
 
 export async function submitGrabbedAnswer(params: {
   userId: string;
   questionId: string;
   answer: string | string[];
+  timeoutMs?: number;
 }): Promise<SubmitGrabAnswerResponse> {
-  const payload = {
-    userId: params.userId,
-    questionId: params.questionId,
-    answer: params.answer,
+  const execute = async () => {
+    let attempt = 0;
+    while (attempt < SUBMIT_MAX_ATTEMPTS) {
+      attempt += 1;
+      const now = Date.now();
+      const waitMs = Math.max(0, SUBMIT_MIN_INTERVAL_MS - (now - submitLastAttemptAt));
+      if (waitMs > 0) {
+        await delay(waitMs);
+      }
+      submitLastAttemptAt = Date.now();
+
+      try {
+        return await submitGrabbedAnswerRaw(params);
+      } catch (error) {
+        const quizError = toQuizApiError(error);
+        if (quizError.type !== "network" || attempt >= SUBMIT_MAX_ATTEMPTS) {
+          throw quizError;
+        }
+        await delay(SUBMIT_RETRY_DELAY_MS);
+      }
+    }
+    throw new QuizApiError(
+      "network",
+      "提交请求多次重试仍未成功",
+      "请检查网络连接或联系工作人员"
+    );
   };
 
-  const response = await fetch(resolveTihaiUrl("/submit-answer"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+  submitChain = submitChain.then(execute, execute);
+  return submitChain;
+}
+
+let grabLockActive = false;
+const grabWaiters: Array<() => void> = [];
+
+function releaseGrabLock() {
+  const next = grabWaiters.shift();
+  if (next) {
+    next();
+  } else {
+    grabLockActive = false;
+  }
+}
+
+async function acquireGrabLock(): Promise<void> {
+  if (!grabLockActive) {
+    grabLockActive = true;
+    return;
+  }
+
+  let resolveWaiter: (() => void) | undefined;
+  const waitPromise = new Promise<void>((resolve) => {
+    resolveWaiter = resolve;
+    grabWaiters.push(resolve);
   });
 
-  let data: SubmitGrabAnswerResponse | undefined;
+  const timeoutPromise = delay(GRAB_LOCK_TIMEOUT_MS).then(() => "timeout" as const);
+  const result = await Promise.race([waitPromise, timeoutPromise]);
+
+  if (result === "timeout") {
+    const index = grabWaiters.indexOf(resolveWaiter!);
+    if (index >= 0) {
+      grabWaiters.splice(index, 1);
+    }
+    throw new LockTimeoutError();
+  }
+
+  grabLockActive = true;
+}
+
+export async function fetchGrabbedQuestion(
+  userId: string
+): Promise<GrabQuestionResult> {
+  await acquireGrabLock();
+
   try {
-    data = await response.json();
-  } catch {
-    data = undefined;
-  }
+    let attempt = 0;
+    while (attempt < GRAB_MAX_ATTEMPTS) {
+      attempt += 1;
 
-  if (!response.ok) {
-    const message =
-      typeof data?.message === "string" && data.message.trim()
-        ? data.message
-        : response.statusText || "提交答案失败";
-    throw new ApiError(response.status, message, data);
+      try {
+        return await fetchGrabbedQuestionRaw(userId);
+      } catch (error) {
+        const quizError = toQuizApiError(error);
+        if (quizError instanceof QuestionPoolEmptyError) {
+          throw quizError;
+        }
+        if (quizError.type !== "network" || attempt >= GRAB_MAX_ATTEMPTS) {
+          throw quizError;
+        }
+        await delay(GRAB_RETRY_DELAY_MS);
+      }
+    }
+    throw new QuizApiError(
+      "network",
+      "抢题请求多次重试仍未成功",
+      "请检查网络连接或联系工作人员"
+    );
+  } finally {
+    releaseGrabLock();
   }
-
-  if (data?.success === false) {
-    const message =
-      typeof data.message === "string" && data.message.trim()
-        ? data.message
-        : "题海答题提交失败";
-    throw new ApiError(response.status, message, data);
-  }
-
-  return data ?? { success: true };
 }
 
 interface AttachmentUploadData {

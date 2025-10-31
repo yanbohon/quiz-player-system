@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const LEADER_STORAGE_KEY = "contestant-app:mqtt-leader";
-const LEADER_LOCK_TTL = 3_000; // shorter TTL so stale locks expire quickly
-const LEADER_RENEW_INTERVAL = 1_000;
-const FOLLOWER_CHECK_INTERVAL = 1_500;
+const LEADER_LOCK_TTL = 15_000; // longer TTL prevents brief pauses from causing leadership flaps
+const LEADER_RENEW_INTERVAL = 5_000;
+const FOLLOWER_CHECK_INTERVAL = 5_000;
 
 interface LeaderRecord {
   tabId: string;

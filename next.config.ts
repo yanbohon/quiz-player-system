@@ -45,6 +45,10 @@ const nextConfig: NextConfig = {
         protocol: "https",
         hostname: "cdn.ohvfx.com",
       },
+      {
+        protocol: "https",
+        hostname: "api.ohvfx.com",
+      },
     ],
   },
 

@@ -162,7 +162,6 @@
   box-shadow: 0 24px 56px rgba(15, 23, 42, 0.12);
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: 24px;
   flex: 1;
 }
@@ -286,7 +285,6 @@
 }
 
 .answerTagValue {
-  font-family: "Menlo", "Roboto Mono", "Courier New", monospace;
   font-weight: 600;
 }
 
@@ -472,6 +470,165 @@
 }
 
 .wordbankOptionLabel {
+  white-space: nowrap;
+}
+
+.pointSelectArea {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  margin: 16px 0 28px;
+}
+
+.pointSelectInput {
+  position: relative;
+  flex: 1;
+  min-height: 60px;
+  padding: 14px 18px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(248, 250, 252, 0.95);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.pointSelectInput::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.45);
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pointSelectInput:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+  border-color: rgba(37, 99, 235, 0.65);
+}
+
+.pointSelectInputFilled {
+  border-color: rgba(37, 99, 235, 0.75);
+}
+
+.pointSelectInputFilled::after {
+  background: rgba(37, 99, 235, 0.8);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.pointSelectPlaceholder {
+  color: rgba(148, 163, 184, 0.78);
+  font-size: 30px;
+}
+
+.pointSelectToken {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  color: #0f172a;
+  font-weight: 600;
+  font-size: 30px;
+  line-height: 1.4;
+  box-shadow: none;
+}
+
+.pointSelectClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease,
+    opacity 0.2s ease, transform 0.2s ease;
+}
+
+.pointSelectClear:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.16);
+  border-color: rgba(220, 38, 38, 0.45);
+  transform: translateY(-1px);
+}
+
+.pointSelectClear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.pointSelectClearIcon {
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  display: inline-block;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  margin-right: 6px;
+}
+
+.pointSelectOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: center;
+}
+
+.pointSelectOption {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 30px;
+  border-radius: 20px;
+  border: 3px solid rgba(148, 163, 184, 0.45);
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 30px;
+  font-weight: 600;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.pointSelectOption:not(:disabled) {
+  cursor: pointer;
+}
+
+
+
+.pointSelectOptionSelected {
+  border-color: #2563eb;
+  background: rgba(226, 232, 255, 0.96);
+  color: #1d4ed8;
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.18);
+}
+
+.pointSelectOption:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pointSelectOptionLabel {
   white-space: nowrap;
 }
 
@@ -705,6 +862,7 @@
   font-size: 22px;
   color: #0f172a;
   line-height: 1.6;
+  white-space: pre-line;
 }
 
 .options {
@@ -719,29 +877,8 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.optionControl {
-  width: 100%;
-  display: block;
-}
-
-.optionGroup :global(.arco-checkbox),
-.optionGroup :global(.arco-radio) {
   width: 100%;
 }
-
-.optionControl :global(.arco-checkbox-icon),
-.optionControl :global(.arco-radio-icon) {
-  display: none;
-}
-
-.optionControl :global(.arco-checkbox-text),
-.optionControl :global(.arco-radio-text) {
-  width: 100%;
-  display: block;
-}
-
 
 .optionCard {
   display: flex;
@@ -753,11 +890,30 @@
   border-radius: 18px;
   border: 3px solid #e2e8f0;
   background: #f8fafc;
+  cursor: pointer;
+  appearance: none;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease,
+    box-shadow 120ms ease;
+  will-change: transform;
+  outline: none;
 }
 
 .optionCardActive {
   border-color: #2563eb;
   background: rgba(37, 99, 235, 0.08);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.18);
+}
+
+.optionCard:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+
+.optionCard[data-pressed="true"],
+.optionCard:not(:disabled):active {
+  transform: scale(0.97) translateY(1px);
 }
 
 .optionBadge {
@@ -786,6 +942,8 @@
 }
 
 .optionLabel {
+  display: block;
+  text-align: left;
   font-size: 16px;
   color: #0f172a;
   font-weight: 600;
@@ -1050,6 +1208,118 @@
   height: 78px!important;
   font-size: 18px;
   font-weight: 600;
+}
+
+.syncQueueWrapper {
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.syncQueueIndicator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  box-sizing: border-box;
+}
+
+.syncQueueLabelGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.syncQueueLabel {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.syncQueueBadge {
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+  font-size: 12px;
+}
+
+.syncQueueBadgeDanger {
+  background: rgba(248, 113, 113, 0.16);
+  color: #b91c1c;
+}
+
+.syncQueueControls {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.syncQueueActionButton {
+  min-width: 64px;
+  height: 28px !important;
+  padding: 0 10px;
+}
+
+.syncQueueDetails {
+  width: 100%;
+  max-width: 680px;
+  margin-top: 4px;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.syncQueueEmpty {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+  text-align: center;
+}
+
+.syncQueueRow {
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.syncQueueRowHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.syncQueueRowLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.syncQueueRowMeta {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.syncQueueRowError {
+  margin: 0;
+  font-size: 12px;
+  color: #b91c1c;
 }
 
 .commandSubmissionResult {
