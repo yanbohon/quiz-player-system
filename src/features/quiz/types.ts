@@ -9,7 +9,8 @@ export type ContestModeId =
   | "last-stand-group"
   | "speed-run"
   | "ocean-adventure"
-  | "ultimate-challenge";
+  | "ultimate-challenge"
+  | "ultimate-pk";
 
 export interface ContestModeMeta {
   id: ContestModeId;

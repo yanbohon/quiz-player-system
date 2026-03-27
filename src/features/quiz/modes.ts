@@ -169,6 +169,24 @@ export const CONTEST_MODES: Record<ContestModeMeta["id"], ContestModeMeta> = {
       localQuestionCache: false,
     },
   },
+  "ultimate-pk": {
+    id: "ultimate-pk",
+    name: "终极PK",
+    description:
+      "围绕队伍发言权切换的环节，通过 MQTT 指令同步流程。",
+    channel: "mqtt",
+    questionFlow: "push",
+    answerFlow: "external",
+    questionFormat: "standard",
+    features: {
+      hasHp: false,
+      requiresBuzzer: false,
+      allowsDelegation: false,
+      supportsTimer: false,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
 };
 
 export const DEFAULT_MODE = CONTEST_MODES.qa;

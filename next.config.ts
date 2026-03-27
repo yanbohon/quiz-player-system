@@ -31,7 +31,10 @@ function resolveAllowedDevOrigins(): string[] {
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  allowedDevOrigins: resolveAllowedDevOrigins(),
+  // 只在开发环境设置 allowedDevOrigins
+  ...(process.env.NODE_ENV !== 'production' && {
+    allowedDevOrigins: resolveAllowedDevOrigins(),
+  }),
 
   // 设置与云托管一致的触发路径（从环境变量读取，默认为空）
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',

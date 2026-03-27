@@ -39,17 +39,24 @@ const MODE_FIELD_KEYS = [
 const MODE_ALIAS_MAP: Record<string, ContestModeId> = {
   qa: "qa",
   "有问必答": "qa",
+  "火眼金睛": "qa",
   问答: "qa",
   "问答赛": "qa",
   "qa-20": "qa-20",
   "有问必答(20)": "qa-20",
   "有问必答（20）": "qa-20",
+  "火眼金睛(20)": "qa-20",
+  "火眼金睛（20）": "qa-20",
   "qa-30": "qa-30",
   "有问必答(30)": "qa-30",
   "有问必答（30）": "qa-30",
+  "火眼金睛(30)": "qa-30",
+  "火眼金睛（30）": "qa-30",
   "qa-50": "qa-50",
   "有问必答(50)": "qa-50",
   "有问必答（50）": "qa-50",
+  "火眼金睛(50)": "qa-50",
+  "火眼金睛（50）": "qa-50",
   "last-stand": "last-stand",
   laststand: "last-stand",
   "一站到底": "last-stand",
@@ -78,6 +85,14 @@ const MODE_ALIAS_MAP: Record<string, ContestModeId> = {
   "终极挑战": "ultimate-challenge",
   "同分加题": "ultimate-challenge",
   "同分加題": "ultimate-challenge",
+  "ultimate-pk": "ultimate-pk",
+  "ultimatepk": "ultimate-pk",
+  "终极pk": "ultimate-pk",
+  "终极PK": "ultimate-pk",
+  "终极PK赛": "ultimate-pk",
+  "终极pk赛": "ultimate-pk",
+  "终极PK环节": "ultimate-pk",
+  "终极pk环节": "ultimate-pk",
 };
 
 const LAST_STAND_GROUP_PATTERN = /^一站到底\s*[\(（].*组[\)）]\s*$/u;
@@ -86,6 +101,10 @@ const MODE_ALIAS_PATTERNS: Array<{ regex: RegExp; mode: ContestModeId }> = [
   {
     regex: /^争分夺秒.*$/u,
     mode: "speed-run",
+  },
+  {
+    regex: /^火眼金睛.*$/u,
+    mode: "qa",
   },
   {
     regex: LAST_STAND_GROUP_PATTERN,
@@ -170,6 +189,13 @@ export function resolveModeForStage(stage: QuizStage): ContestModeId | undefined
   for (const candidate of nameCandidates) {
     if (!candidate) continue;
     const lower = candidate.toLowerCase();
+    const compact = lower.replace(/\s+/g, "");
+    if (lower.includes("火眼金睛")) {
+      return "qa";
+    }
+    if (lower.includes("终极pk") || compact.includes("终极pk")) {
+      return "ultimate-pk";
+    }
     if (lower.includes("题海")) {
       return "ocean-adventure";
     }

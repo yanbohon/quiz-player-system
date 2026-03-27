@@ -23,6 +23,8 @@ import styles from "./page.module.css";
 
 import type { FusionEventSummary } from "@/lib/fusionClient";
 
+const WAITING_PAGE_VERSION = "V2026.03.27.1";
+
 function resolvePosterUrl(event?: FusionEventSummary): string | undefined {
   if (!event) return undefined;
   const candidate = event as FusionEventSummary & {
@@ -274,9 +276,12 @@ export default function WaitingPage() {
   if (!storeHydrated) {
     return (
       <div className={styles.page}>
-        <div className={styles.fallback}>
-          <Loading />
+        <div className={styles.pageContent}>
+          <div className={styles.fallback}>
+            <Loading />
+          </div>
         </div>
+        <p className={styles.versionFooter}>{WAITING_PAGE_VERSION}</p>
       </div>
     );
   }
@@ -333,137 +338,140 @@ export default function WaitingPage() {
 
   return (
     <div className={styles.page}>
-      <ArcoClient>
-        <NavBar
-          title="比赛等待区"
-          leftContent={null}
-          rightContent={
-            <button type="button" className={styles.logoutButton} onClick={handleLogout}>
-              <Image
-                src={LogoutIcon}
-                alt="退出登录"
-                width={24}
-                height={24}
-                className={styles.logoutIcon}
-                priority
-              />
-            </button>
-          }
-        />
+      <div className={styles.pageContent}>
+        <ArcoClient>
+          <NavBar
+            title="比赛等待区"
+            leftContent={null}
+            rightContent={
+              <button type="button" className={styles.logoutButton} onClick={handleLogout}>
+                <Image
+                  src={LogoutIcon}
+                  alt="退出登录"
+                  width={24}
+                  height={24}
+                  className={styles.logoutIcon}
+                  priority
+                />
+              </button>
+            }
+          />
 
-        <div className={styles.body}>
-          <NoticeBar className={styles.notice} marquee="none" leftContent={<IconNotice />}>
-          请核对队伍信息是否正确，如有问题请举手反馈。
-          </NoticeBar>
+          <div className={styles.body}>
+            <NoticeBar className={styles.notice} marquee="none" leftContent={<IconNotice />}>
+            请核对队伍信息是否正确，如有问题请举手反馈。
+            </NoticeBar>
 
-          <div className={styles.ticket}>
-            <div className={styles.posterSection}>
-              {posterUrl ? (
-                <div className={styles.posterImageWrapper}>
-                  <Image
-                    src={posterUrl}
-                    alt={`${selectedEvent?.name ?? "赛事"}海报`}
-                    fill
-                    priority
-                    className={styles.posterImage}
-                    sizes="(max-width: 768px) 100vw, 520px"
-                  />
-                </div>
-              ) : (
-                <div className={styles.posterPlaceholder}>
-                  <IconPicture className={styles.posterIcon} />
-                </div>
-              )}
-            </div>
+            <div className={styles.ticket}>
+              <div className={styles.posterSection}>
+                {posterUrl ? (
+                  <div className={styles.posterImageWrapper}>
+                    <Image
+                      src={posterUrl}
+                      alt={`${selectedEvent?.name ?? "赛事"}海报`}
+                      fill
+                      priority
+                      className={styles.posterImage}
+                      sizes="(max-width: 768px) 100vw, 520px"
+                    />
+                  </div>
+                ) : (
+                  <div className={styles.posterPlaceholder}>
+                    <IconPicture className={styles.posterIcon} />
+                  </div>
+                )}
+              </div>
 
-            <div className={styles.ticketContent}>
-              {isRankView ? (
-                <div className={styles.rankArea}>
-                  <p className={styles.rankTitle}>总分排行榜</p>
-                  {rankStatus === "loading" ? (
-                    <div className={styles.rankLoading}>
-                      <Loading type="dot" stroke={3} />
-                      <p className={styles.rankMessage}>正在获取排行榜...</p>
-                    </div>
-                  ) : rankStatus === "error" ? (
-                    <p className={styles.rankMessage}>
-                      {rankError ?? "排行榜数据获取失败，请稍后再试"}
-                    </p>
-                  ) : rankEntries.length === 0 ? (
-                    <p className={styles.rankMessage}>暂无排行榜数据</p>
-                  ) : (
-                    <div className={styles.rankList}>
-                      {rankEntries.map((entry, index) => (
-                        <div key={`${entry.id}-${index}`} className={styles.rankRow}>
-                          <div className={styles.rankItem}>
-                            <span className={styles.rankLabel}>{index + 1}.</span>
-                            <span className={styles.rankName}>{entry.schoolName}</span>
-                            <span className={styles.rankScore}>{entry.score}分</span>
+              <div className={styles.ticketContent}>
+                {isRankView ? (
+                  <div className={styles.rankArea}>
+                    <p className={styles.rankTitle}>总分排行榜</p>
+                    {rankStatus === "loading" ? (
+                      <div className={styles.rankLoading}>
+                        <Loading type="dot" stroke={3} />
+                        <p className={styles.rankMessage}>正在获取排行榜...</p>
+                      </div>
+                    ) : rankStatus === "error" ? (
+                      <p className={styles.rankMessage}>
+                        {rankError ?? "排行榜数据获取失败，请稍后再试"}
+                      </p>
+                    ) : rankEntries.length === 0 ? (
+                      <p className={styles.rankMessage}>暂无排行榜数据</p>
+                    ) : (
+                      <div className={styles.rankList}>
+                        {rankEntries.map((entry, index) => (
+                          <div key={`${entry.id}-${index}`} className={styles.rankRow}>
+                            <div className={styles.rankItem}>
+                              <span className={styles.rankLabel}>{index + 1}.</span>
+                              <span className={styles.rankName}>{entry.schoolName}</span>
+                              <span className={styles.rankScore}>{entry.score}分</span>
+                            </div>
+                            {index < rankEntries.length - 1 ? (
+                              <Divider className={styles.rankDivider} />
+                            ) : null}
                           </div>
-                          {index < rankEntries.length - 1 ? (
-                            <Divider className={styles.rankDivider} />
-                          ) : null}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                    ) : (
+                      <>
+                        <div className={styles.identityRow}>
+                          <div
+                            className={
+                              showBadgeImage
+                                ? `${styles.avatar} ${styles.avatarHasImage}`
+                                : styles.avatar
+                            }
+                          >
+                            {showBadgeImage && schoolBadgeUrl ? (
+                              <Image
+                                src={schoolBadgeUrl}
+                                alt={schoolBadgeAlt}
+                                className={styles.avatarImage}
+                                onError={() => setBadgeLoadError(true)}
+                                loading="lazy"
+                                width={100}
+                                height={100}
+                              />
+                            ) : (
+                              <IconUserFill className={styles.avatarIcon} aria-hidden="true" />
+                            )}
+                          </div>
+                          <div className={styles.identityInfo}>
+                            <p className={styles.name}>{user?.name ?? "未登录选手"}</p>
+                            <span className={styles.identityMeta}>{teamDisplayName}</span>
+                          </div>
+                        </div>
+
+                        <div className={styles.infoGrid}>
+                      {ticketFields.map(({ key, label, value, span }) => (
+                        <div
+                          key={key}
+                          className={`${styles.ticketField} ${
+                            span === 2 ? styles.ticketFieldFull : ""
+                          }`}
+                        >
+                          <span className={styles.fieldLabel}>{label}</span>
+                          <span className={styles.fieldValue}>{value}</span>
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-                  ) : (
-                    <>
-                      <div className={styles.identityRow}>
-                        <div
-                          className={
-                            showBadgeImage
-                              ? `${styles.avatar} ${styles.avatarHasImage}`
-                              : styles.avatar
-                          }
-                        >
-                          {showBadgeImage && schoolBadgeUrl ? (
-                            <Image
-                              src={schoolBadgeUrl}
-                              alt={schoolBadgeAlt}
-                              className={styles.avatarImage}
-                              onError={() => setBadgeLoadError(true)}
-                              loading="lazy"
-                              width={100}
-                              height={100}
-                            />
-                          ) : (
-                            <IconUserFill className={styles.avatarIcon} aria-hidden="true" />
-                          )}
-                        </div>
-                        <div className={styles.identityInfo}>
-                          <p className={styles.name}>{user?.name ?? "未登录选手"}</p>
-                          <span className={styles.identityMeta}>{teamDisplayName}</span>
-                        </div>
-                      </div>
 
-                      <div className={styles.infoGrid}>
-                    {ticketFields.map(({ key, label, value, span }) => (
-                      <div
-                        key={key}
-                        className={`${styles.ticketField} ${
-                          span === 2 ? styles.ticketFieldFull : ""
-                        }`}
-                      >
-                        <span className={styles.fieldLabel}>{label}</span>
-                        <span className={styles.fieldValue}>{value}</span>
-                      </div>
-                    ))}
-                  </div>
+                    <div className={styles.ticketDivider} aria-hidden="true" />
 
-                  <div className={styles.ticketDivider} aria-hidden="true" />
-
-                  <div className={styles.waitingArea}>
-                    <Loading type="dot" stroke={3} />
-                    <p className={styles.waitingText}>等待开始环节...</p>
-                  </div>
-                </>
-              )}
+                    <div className={styles.waitingArea}>
+                      <Loading type="dot" stroke={3} />
+                      <p className={styles.waitingText}>等待开始环节...</p>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      </ArcoClient>
+        </ArcoClient>
+      </div>
+      <p className={styles.versionFooter}>{WAITING_PAGE_VERSION}</p>
     </div>
   );
 }

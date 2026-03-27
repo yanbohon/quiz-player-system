@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
@@ -11,8 +11,10 @@ import {
   NavBar,
   Progress,
   Tag,
+  Image as ArcoImage,
+  ImagePreview,
 } from "@arco-design/mobile-react";
-import Image from "next/image";
+import NextImage from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
@@ -53,16 +55,49 @@ const FILL_SKETCH_CACHE_LIMIT = 10;
 const FILL_PREVIEW_STORAGE_KEY = "quiz-fill-preview-cache";
 const SUBMIT_THROTTLE_INTERVAL_MS = 1000;
 const SUBMIT_FREQUENT_TOAST_DURATION_MS = 500;
-const SUBMISSION_TIMEOUT_MS = 2000;
-const PERSISTENCE_TIMEOUT_MS = 2000;
+const SUBMISSION_TIMEOUT_MS = 5000;
+const PERSISTENCE_TIMEOUT_MS = 6000;
+const PERSISTENCE_STORAGE_KEY = "quiz-persistence-queue-v1";
+const PERSISTENCE_MAX_AUTO_ATTEMPTS = 5;
+const PERSISTENCE_BASE_RETRY_DELAY_MS = 1500;
+const PERSISTENCE_MAX_RETRY_DELAY_MS = 20000;
+const EMPTY_BOARD_PLACEHOLDER_URL = "space/2025/11/13/8df5e037ae084183bf23b2fcba675f6d";
+
+type AnswerChoicePersistenceTask = {
+  type: "answer-choice";
+  params: {
+    datasheetId: string;
+    recordId: string;
+    userId: string;
+    answer: string;
+    fieldKey?: string;
+  };
+};
+
+type JudgeResultPersistenceTask = {
+  type: "judge-result";
+  params: {
+    datasheetId: string;
+    recordId: string;
+    questionId: string;
+    answer: string;
+    time?: number | string;
+    light?: "0" | "1";
+    statusFieldKey?: string;
+    status?: string;
+  };
+};
+
+type PersistenceTask = AnswerChoicePersistenceTask | JudgeResultPersistenceTask;
 
 type PersistenceJob = {
   id: string;
   label: string;
-  execute: () => Promise<void>;
   createdAt: number;
   attempts: number;
   lastErrorMessage?: string;
+  nextRetryAt?: number;
+  tasks: PersistenceTask[];
 };
 
 type PersistenceJobSnapshot = {
@@ -71,6 +106,7 @@ type PersistenceJobSnapshot = {
   createdAt: number;
   attempts: number;
   lastErrorMessage?: string;
+  nextRetryAt?: number;
 };
 
 type PersistenceQueueSnapshot = {
@@ -78,6 +114,449 @@ type PersistenceQueueSnapshot = {
   failed: number;
   failedItems: PersistenceJobSnapshot[];
 };
+
+type PersistedPersistenceState = {
+  pending: PersistenceJob[];
+  failed: PersistenceJob[];
+  active?: PersistenceJob | null;
+};
+
+type QuestionImageEntry = {
+  thumb: string;
+  large: string;
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function computeRetryDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number
+) {
+  const safeAttempt = Math.max(attempt - 1, 0);
+  const exponential = Math.min(maxDelayMs, baseDelayMs * 2 ** safeAttempt);
+  const jitter = Math.floor(Math.random() * Math.max(250, exponential * 0.2));
+  return exponential + jitter;
+}
+
+function dedupePersistenceJobs(jobs: PersistenceJob[]): PersistenceJob[] {
+  const seen = new Set<string>();
+  return jobs.filter((job) => {
+    if (seen.has(job.id)) {
+      return false;
+    }
+    seen.add(job.id);
+    return true;
+  });
+}
+
+function sanitizePersistenceTask(source: unknown): PersistenceTask | null {
+  if (!isPlainRecord(source)) return null;
+  const type = source["type"];
+  const rawParams = source["params"];
+  if (type !== "answer-choice" && type !== "judge-result") {
+    return null;
+  }
+  if (!isPlainRecord(rawParams)) {
+    return null;
+  }
+
+  if (type === "answer-choice") {
+    const datasheetId = rawParams["datasheetId"];
+    const recordId = rawParams["recordId"];
+    const userId = rawParams["userId"];
+    const answer = rawParams["answer"];
+    const fieldKey = rawParams["fieldKey"];
+    if (
+      typeof datasheetId !== "string" ||
+      typeof recordId !== "string" ||
+      typeof userId !== "string" ||
+      typeof answer !== "string"
+    ) {
+      return null;
+    }
+    return {
+      type,
+      params: {
+        datasheetId,
+        recordId,
+        userId,
+        answer,
+        fieldKey: typeof fieldKey === "string" && fieldKey.trim() ? fieldKey : undefined,
+      },
+    };
+  }
+
+  const datasheetId = rawParams["datasheetId"];
+  const recordId = rawParams["recordId"];
+  const questionId = rawParams["questionId"];
+  const answer = rawParams["answer"];
+  const time = rawParams["time"];
+  const light = rawParams["light"];
+  const statusFieldKey = rawParams["statusFieldKey"];
+  const status = rawParams["status"];
+  if (
+    typeof datasheetId !== "string" ||
+    typeof recordId !== "string" ||
+    typeof questionId !== "string" ||
+    typeof answer !== "string"
+  ) {
+    return null;
+  }
+  return {
+    type,
+    params: {
+      datasheetId,
+      recordId,
+      questionId,
+      answer,
+      time:
+        typeof time === "number" || typeof time === "string"
+          ? time
+          : undefined,
+      light: light === "0" || light === "1" ? light : undefined,
+      statusFieldKey:
+        typeof statusFieldKey === "string" && statusFieldKey.trim()
+          ? statusFieldKey
+          : undefined,
+      status:
+        typeof status === "string" && status.trim() ? status : undefined,
+    },
+  };
+}
+
+function sanitizePersistenceJob(source: unknown): PersistenceJob | null {
+  if (!isPlainRecord(source)) return null;
+  const id = source["id"];
+  const label = source["label"];
+  const createdAt = source["createdAt"];
+  const attempts = source["attempts"];
+  const lastErrorMessage = source["lastErrorMessage"];
+  const nextRetryAt = source["nextRetryAt"];
+  const rawTasks = source["tasks"];
+  const tasks = Array.isArray(rawTasks)
+    ? rawTasks
+        .map((task) => sanitizePersistenceTask(task))
+        .filter((task): task is PersistenceTask => Boolean(task))
+    : [];
+
+  if (
+    typeof id !== "string" ||
+    typeof label !== "string" ||
+    typeof createdAt !== "number" ||
+    !Number.isFinite(createdAt) ||
+    tasks.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    createdAt,
+    attempts:
+      typeof attempts === "number" && Number.isFinite(attempts)
+        ? Math.max(0, Math.trunc(attempts))
+        : 0,
+    lastErrorMessage:
+      typeof lastErrorMessage === "string" && lastErrorMessage.trim()
+        ? lastErrorMessage
+        : undefined,
+    nextRetryAt:
+      typeof nextRetryAt === "number" && Number.isFinite(nextRetryAt)
+        ? nextRetryAt
+        : undefined,
+    tasks,
+  };
+}
+
+function readPersistedPersistenceState(): PersistedPersistenceState {
+  if (typeof window === "undefined") {
+    return { pending: [], failed: [] };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PERSISTENCE_STORAGE_KEY);
+    if (!raw) {
+      return { pending: [], failed: [] };
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!isPlainRecord(parsed)) {
+      return { pending: [], failed: [] };
+    }
+
+    const pending = Array.isArray(parsed["pending"])
+      ? parsed["pending"]
+          .map((job) => sanitizePersistenceJob(job))
+          .filter((job): job is PersistenceJob => Boolean(job))
+      : [];
+    const failed = Array.isArray(parsed["failed"])
+      ? parsed["failed"]
+          .map((job) => sanitizePersistenceJob(job))
+          .filter((job): job is PersistenceJob => Boolean(job))
+      : [];
+    const active = sanitizePersistenceJob(parsed["active"]);
+
+    return {
+      pending: dedupePersistenceJobs([
+        ...(active ? [{ ...active, nextRetryAt: undefined }] : []),
+        ...pending,
+      ]),
+      failed: dedupePersistenceJobs(failed),
+    };
+  } catch {
+    window.localStorage.removeItem(PERSISTENCE_STORAGE_KEY);
+    return { pending: [], failed: [] };
+  }
+}
+
+const QuestionImageGallery = memo(function QuestionImageGallery({
+  entries,
+}: {
+  entries: QuestionImageEntry[];
+}) {
+  const [openIndex, setOpenIndex] = useState(-1);
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [failedIndices, setFailedIndices] = useState<Set<number>>(() => new Set());
+
+  useEffect(() => {
+    setOpenIndex(-1);
+    setFailedIndices(new Set());
+    buttonRefs.current = [];
+  }, [entries]);
+
+  const previewImages = useMemo(
+    () =>
+      entries.map((entry) => ({
+        src: entry.large,
+        fallbackSrc: entry.thumb,
+      })),
+    [entries]
+  );
+
+  const handleImageLoad = useCallback((index: number) => {
+    setFailedIndices((prev) => {
+      if (!prev.has(index)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+  }, []);
+
+  const handleImageError = useCallback((index: number) => {
+    setFailedIndices((prev) => {
+      if (prev.has(index)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(index);
+      return next;
+    });
+  }, []);
+
+  const getThumbBounds = useCallback((index: number) => {
+    const element = buttonRefs.current[index];
+    if (element) {
+      return element.getBoundingClientRect();
+    }
+    if (typeof window === "undefined" || typeof DOMRect === "undefined") {
+      return {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+      } as DOMRect;
+    }
+    return new DOMRect(0, 0, 0, 0);
+  }, []);
+
+  if (!entries.length) {
+    return null;
+  }
+
+  const allFailed = failedIndices.size > 0 && failedIndices.size === entries.length;
+
+  return (
+    <div className={styles.questionImageContainer}>
+      <div className={styles.questionImageGrid}>
+        {entries.map((entry, index) => (
+          <button
+            key={`${entry.large}-${index}`}
+            type="button"
+            className={styles.questionImageThumbButton}
+            onClick={() => setOpenIndex(index)}
+            ref={(element) => {
+              buttonRefs.current[index] = element;
+            }}
+            aria-label={`查看第${index + 1}张图片`}
+          >
+            <ArcoImage
+              className={styles.questionImageThumbImage}
+              src={entry.thumb}
+              alt={`题目配图 ${index + 1}`}
+              fit="cover"
+              position="center"
+              showLoading
+              showError
+              onLoad={() => handleImageLoad(index)}
+              onError={() => handleImageError(index)}
+            />
+          </button>
+        ))}
+      </div>
+      {allFailed ? (
+        <div className={styles.questionImageFallback} role="status">
+          图片加载失败，请稍后重试
+        </div>
+      ) : null}
+      <ImagePreview
+        images={previewImages}
+        openIndex={openIndex}
+        close={() => setOpenIndex(-1)}
+        getThumbBounds={getThumbBounds}
+      />
+    </div>
+  );
+});
+
+const QUESTION_IMAGE_EXTENSION_PATTERN = /\.(?:jpe?g|png|gif|bmp|webp|avif|svg)$/i;
+const QUESTION_IMAGE_CDN_HOST = "cdn.ohvfx.com";
+
+function isValidImageUrlCandidate(candidate: unknown): candidate is string {
+  if (typeof candidate !== "string") return false;
+  const trimmed = candidate.trim();
+  if (!trimmed) return false;
+  const sanitized = trimmed.split(/[?#]/)[0];
+  return QUESTION_IMAGE_EXTENSION_PATTERN.test(sanitized.toLowerCase());
+}
+
+function normalizeQuestionImageUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+
+  if (/^data:image\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/^http:\/\//i, "https://");
+  }
+
+  if (trimmed.startsWith("//")) {
+    return `https:${trimmed}`;
+  }
+
+  const normalized = trimmed.replace(/^\/+/, "");
+  return `https://${QUESTION_IMAGE_CDN_HOST}/${normalized}`;
+}
+
+function parseQuestionImageList(raw: unknown): QuestionImageEntry[] {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+
+  let payload: unknown = raw;
+  if (typeof payload === "string") {
+    const trimmed = payload.trim();
+    if (!trimmed) {
+      return [];
+    }
+    try {
+      payload = JSON.parse(trimmed);
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("Failed to parse question image data", error);
+      }
+      return [];
+    }
+  }
+
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  const entries: QuestionImageEntry[] = [];
+  for (const item of payload) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const thumbCandidate = record.thumb;
+    const largeCandidate = record.large;
+    if (!isValidImageUrlCandidate(thumbCandidate) || !isValidImageUrlCandidate(largeCandidate)) {
+      continue;
+    }
+    const thumb = normalizeQuestionImageUrl(String(thumbCandidate));
+    const large = normalizeQuestionImageUrl(String(largeCandidate));
+    entries.push({ thumb, large });
+  }
+
+  return entries;
+}
+
+function extractQuestionImageEntries(
+  source: Record<string, unknown> | undefined | null
+): QuestionImageEntry[] {
+  if (!source) return [];
+  return parseQuestionImageList(source["img"]);
+}
+
+function resolveQuestionImageEntries(
+  question: QuizQuestion | undefined,
+  normalizedQuestion: NormalizedQuestion | null
+): QuestionImageEntry[] {
+  if (!question) return [];
+
+  if (isOceanQuestion(question)) {
+    const directEntries = extractQuestionImageEntries(question.extra);
+    if (directEntries.length > 0) {
+      return directEntries;
+    }
+  }
+
+  if (normalizedQuestion?.raw && typeof normalizedQuestion.raw === "object") {
+    return extractQuestionImageEntries(normalizedQuestion.raw as Record<string, unknown>);
+  }
+
+  return [];
+}
+
+function findNormalizedQuestion(
+  question: QuizQuestion | undefined,
+  normalizedQuestions: NormalizedQuestion[]
+): NormalizedQuestion | null {
+  if (!question) return null;
+  const targetId = isStandardQuestion(question)
+    ? question.id
+    : isOceanQuestion(question)
+    ? question.questionKey
+    : null;
+  if (!targetId) return null;
+  return normalizedQuestions.find((item) => item.id === targetId) ?? null;
+}
+
+function isImageTypeQuestion(normalizedQuestion: NormalizedQuestion | null): boolean {
+  if (!normalizedQuestion) return false;
+  const { type, raw } = normalizedQuestion;
+  const typeTokens: string[] = [];
+  if (typeof type === "string" && type.trim()) {
+    typeTokens.push(type.trim());
+  }
+  if (raw && typeof raw === "object") {
+    const rawType = (raw as Record<string, unknown>).type;
+    if (typeof rawType === "string" && rawType.trim()) {
+      typeTokens.push(rawType.trim());
+    }
+  }
+  return typeTokens.some((token) => token.includes("图片题"));
+}
 
 function createRequestId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -247,14 +726,6 @@ function matchingPairsToSheetAnswer(pairs: string[]): string {
   return Object.keys(obj).length > 0 ? JSON.stringify(obj) : "未选";
 }
 
-function isTruthyEnv(value: string | undefined): boolean {
-  if (!value) return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-const DEBUG_SHOW_ANSWER = isTruthyEnv(process.env.NEXT_PUBLIC_DEBUG_SHOW_ANSWER);
-
 function formatStandardQuestionAnswer(question: StandardQuestion): string | null {
   const raw = question.correctAnswer;
   if (raw === undefined || raw === null) {
@@ -321,7 +792,7 @@ function formatStandardQuestionAnswer(question: StandardQuestion): string | null
   }
 
   if (question.type === "fill") {
-    return values.join(" / ") || null;
+    return values.join("") || null;
   }
 
   if (question.type === "multiple" || question.type === "indeterminate") {
@@ -435,8 +906,6 @@ interface SubmitOptions {
   allowEmpty?: boolean;
   source?: SubmitSource;
 }
-
-type BoardStatus = "idle" | "waiting" | "uploading" | "success" | "error";
 
 interface MatchingLineSegment {
   id: string;
@@ -737,6 +1206,35 @@ function ErrorBadgeIcon({ className }: { className?: string }) {
   );
 }
 
+function SwitchArrowsIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 64 64"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M18 24h28l-8-8"
+        stroke="currentColor"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path
+        d="M46 40H18l8 8"
+        stroke="currentColor"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
 interface OptionCardButtonProps {
   value: string;
   label: string;
@@ -746,6 +1244,7 @@ interface OptionCardButtonProps {
   disabled?: boolean;
   onSelect: (value: string) => void;
   role?: "radio" | "checkbox";
+  status?: "correct" | "wrong";
 }
 
 function OptionCardButton({
@@ -757,6 +1256,7 @@ function OptionCardButton({
   disabled = false,
   onSelect,
   role,
+  status,
 }: OptionCardButtonProps) {
   const [isPressed, setPressed] = useState(false);
   const skipClickRef = useRef(false);
@@ -887,11 +1387,22 @@ function OptionCardButton({
   const className = [
     styles.optionCard,
     active ? styles.optionCardActive : "",
+    status === "correct" ? styles.optionCardCorrect : "",
+    status === "wrong" ? styles.optionCardWrong : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   const ariaChecked = role ? active : undefined;
+
+  const badgeClass = [
+    styles.optionBadge,
+    active ? styles.optionBadgeActive : "",
+    status === "correct" ? styles.optionBadgeCorrect : "",
+    status === "wrong" ? styles.optionBadgeWrong : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <button
@@ -911,9 +1422,7 @@ function OptionCardButton({
       onTouchCancel={handleTouchEnd}
       onClick={handleClick}
     >
-      <span
-        className={`${styles.optionBadge} ${active ? styles.optionBadgeActive : ""}`}
-      >
+      <span className={badgeClass}>
         {badge}
       </span>
       <div className={styles.optionContent}>
@@ -1115,6 +1624,7 @@ function QuizPageContent() {
   const isQaMode = isQaVariantMode(meta.id);
   const isLastStandMode = meta.id === "last-stand" || meta.id === "last-stand-group";
   const isGroupedLastStand = meta.id === "last-stand-group";
+  const isUltimatePkMode = meta.id === "ultimate-pk";
   const delegateAnswerToControl = controls.delegateAnswerTo;
   const triggerBuzzerControl = controls.triggerBuzzer;
   const applyHostJudgementControl = controls.applyHostJudgement;
@@ -1176,10 +1686,15 @@ function QuizPageContent() {
     MQTT_TOPICS.command,
     shouldHandleSubmitCommand
   );
+  const ultimatePkCommandMessage = useMqttSubscription(
+    MQTT_TOPICS.command,
+    meta.id === "ultimate-pk"
+  );
   const navWrapperRef = useRef<HTMLDivElement | null>(null);
   const [isBoardOpen, setBoardOpen] = useState(false);
   const boardRef = useRef<FillDrawingBoardHandle | null>(null);
-  const [boardStatus, setBoardStatus] = useState<BoardStatus>("idle");
+  const [boardSubmitted, setBoardSubmitted] = useState(false);
+  const [isBoardUploading, setBoardUploading] = useState(false);
   const fillSketchCacheRef = useRef<
     Record<string, { preview?: string; paths?: SmoothSerializedStroke[] }>
   >({});
@@ -1192,6 +1707,9 @@ function QuizPageContent() {
   const retractHandlingRef = useRef(false);
   const [notifyOffset, setNotifyOffset] = useState(DEFAULT_NOTIFY_OFFSET);
   const [isCommandSubmissionLocked, setCommandSubmissionLocked] = useState(false);
+  const [isCommandSubmissionOverlayVisible, setCommandSubmissionOverlayVisible] =
+    useState(false);
+  const [isAnswerRevealActive, setAnswerRevealActive] = useState(false);
   const [wordbankActiveIndex, setWordbankActiveIndex] = useState<number | null>(null);
   const [activeMatchingLeft, setActiveMatchingLeft] = useState<string | null>(null);
   const matchingBoardRef = useRef<HTMLDivElement | null>(null);
@@ -1234,6 +1752,63 @@ function QuizPageContent() {
     failedItems: [],
   });
   const [showPersistenceDetails, setShowPersistenceDetails] = useState(false);
+  const [ultimatePkTeam, setUltimatePkTeam] = useState<"affirmative" | "negative">("affirmative");
+  const [ultimatePkStageLocked, setUltimatePkStageLocked] = useState(true);
+  const [ultimatePkThrottleActive, setUltimatePkThrottleActive] = useState(false);
+  const [ultimatePkSending, setUltimatePkSending] = useState(false);
+  const ultimatePkThrottleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistenceRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistenceRestoredRef = useRef(false);
+
+  const clearUltimatePkThrottle = useCallback(() => {
+    if (ultimatePkThrottleTimerRef.current !== null) {
+      clearTimeout(ultimatePkThrottleTimerRef.current);
+      ultimatePkThrottleTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleUltimatePkThrottle = useCallback(() => {
+    clearUltimatePkThrottle();
+    setUltimatePkThrottleActive(true);
+    ultimatePkThrottleTimerRef.current = setTimeout(() => {
+      setUltimatePkThrottleActive(false);
+      ultimatePkThrottleTimerRef.current = null;
+    }, 1000);
+  }, [clearUltimatePkThrottle]);
+
+  const clearPersistenceRetryTimer = useCallback(() => {
+    if (persistenceRetryTimerRef.current !== null) {
+      clearTimeout(persistenceRetryTimerRef.current);
+      persistenceRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const writePersistedPersistenceState = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const payload: PersistedPersistenceState = {
+        pending: persistenceQueueRef.current,
+        failed: persistenceFailedRef.current,
+        active: persistenceActiveRef.current,
+      };
+      const hasJobs =
+        payload.pending.length > 0 ||
+        payload.failed.length > 0 ||
+        Boolean(payload.active);
+
+      if (!hasJobs) {
+        window.localStorage.removeItem(PERSISTENCE_STORAGE_KEY);
+        return;
+      }
+
+      window.localStorage.setItem(PERSISTENCE_STORAGE_KEY, JSON.stringify(payload));
+    } catch (error) {
+      console.warn("Failed to persist sync queue state", error);
+    }
+  }, []);
 
   const updatePersistenceSnapshot = useCallback(() => {
     const active = persistenceActiveRef.current ? 1 : 0;
@@ -1246,28 +1821,99 @@ function QuizPageContent() {
         createdAt: job.createdAt,
         attempts: job.attempts,
         lastErrorMessage: job.lastErrorMessage,
+        nextRetryAt: job.nextRetryAt,
       })),
     });
-  }, []);
+    writePersistedPersistenceState();
+  }, [writePersistedPersistenceState]);
+
+  const executePersistenceJob = useCallback(
+    async (job: PersistenceJob) => {
+      for (const task of job.tasks) {
+        if (task.type === "answer-choice") {
+          await withTimeout(
+            submitAnswerChoice(task.params),
+            PERSISTENCE_TIMEOUT_MS,
+            () =>
+              new QuizApiError(
+                "timeout",
+                "答题记录同步超时",
+                "网络恢复后会自动重试"
+              )
+          );
+          continue;
+        }
+
+        await withTimeout(
+          submitJudgeResult(task.params),
+          PERSISTENCE_TIMEOUT_MS,
+          () =>
+            new QuizApiError(
+              "timeout",
+              "成绩结果同步超时",
+              "网络恢复后会自动重试"
+            )
+        );
+      }
+    },
+    [submitAnswerChoice, submitJudgeResult]
+  );
 
   const processPersistenceQueue = useCallback(() => {
-    if (persistenceActiveRef.current || persistenceQueueRef.current.length === 0) {
+    const isOffline =
+      typeof window !== "undefined" &&
+      typeof window.navigator !== "undefined" &&
+      window.navigator.onLine === false;
+
+    if (isOffline) {
+      clearPersistenceRetryTimer();
       updatePersistenceSnapshot();
       return;
     }
 
-    const job = persistenceQueueRef.current.shift();
+    if (persistenceActiveRef.current || persistenceQueueRef.current.length === 0) {
+      clearPersistenceRetryTimer();
+      updatePersistenceSnapshot();
+      return;
+    }
+
+    const now = Date.now();
+    let nextRetryAt: number | null = null;
+    const readyIndex = persistenceQueueRef.current.findIndex((job) => {
+      if (typeof job.nextRetryAt !== "number" || job.nextRetryAt <= now) {
+        return true;
+      }
+      nextRetryAt =
+        nextRetryAt === null ? job.nextRetryAt : Math.min(nextRetryAt, job.nextRetryAt);
+      return false;
+    });
+
+    if (readyIndex < 0) {
+      clearPersistenceRetryTimer();
+      if (nextRetryAt !== null) {
+        persistenceRetryTimerRef.current = setTimeout(() => {
+          persistenceRetryTimerRef.current = null;
+          processPersistenceQueue();
+        }, Math.max(250, nextRetryAt - now));
+      }
+      updatePersistenceSnapshot();
+      return;
+    }
+
+    const [job] = persistenceQueueRef.current.splice(readyIndex, 1);
     if (!job) {
       updatePersistenceSnapshot();
       return;
     }
 
+    clearPersistenceRetryTimer();
+    job.nextRetryAt = undefined;
     persistenceActiveRef.current = job;
     updatePersistenceSnapshot();
 
     const executeJob = async () => {
       try {
-        await job.execute();
+        await executePersistenceJob(job);
         persistenceActiveRef.current = null;
         updatePersistenceSnapshot();
         processPersistenceQueue();
@@ -1277,10 +1923,28 @@ function QuizPageContent() {
           normalized.suggestion ? `，${normalized.suggestion}` : ""
         }`;
         job.attempts += 1;
-        persistenceFailedRef.current.push(job);
         persistenceActiveRef.current = null;
+        const shouldAutoRetry =
+          (normalized.type === "network" || normalized.type === "timeout") &&
+          job.attempts < PERSISTENCE_MAX_AUTO_ATTEMPTS;
+
+        if (shouldAutoRetry) {
+          job.nextRetryAt =
+            Date.now() +
+            computeRetryDelayMs(
+              job.attempts,
+              PERSISTENCE_BASE_RETRY_DELAY_MS,
+              PERSISTENCE_MAX_RETRY_DELAY_MS
+            );
+          job.lastErrorMessage = `自动重试中：${job.lastErrorMessage}`;
+          persistenceQueueRef.current.push(job);
+        } else {
+          job.nextRetryAt = undefined;
+          persistenceFailedRef.current.push(job);
+          showQuizApiErrorToast(normalized, job.label);
+        }
+
         updatePersistenceSnapshot();
-        showQuizApiErrorToast(normalized, job.label);
         processPersistenceQueue();
       }
     };
@@ -1288,7 +1952,11 @@ function QuizPageContent() {
     executeJob().catch((error) => {
       console.error("同步任务执行失败", error);
     });
-  }, [updatePersistenceSnapshot]);
+  }, [
+    clearPersistenceRetryTimer,
+    executePersistenceJob,
+    updatePersistenceSnapshot,
+  ]);
 
   const enqueuePersistenceJob = useCallback(
     (job: PersistenceJob) => {
@@ -1299,7 +1967,11 @@ function QuizPageContent() {
         // 避免重复排队，失败任务会通过 retry 接口重新进入队列
         return;
       }
-      persistenceQueueRef.current.push(job);
+      persistenceQueueRef.current.push({
+        ...job,
+        lastErrorMessage: undefined,
+        nextRetryAt: undefined,
+      });
       updatePersistenceSnapshot();
       processPersistenceQueue();
     },
@@ -1314,6 +1986,7 @@ function QuizPageContent() {
     const jobs = persistenceFailedRef.current.splice(0);
     jobs.forEach((job) => {
       job.lastErrorMessage = undefined;
+      job.nextRetryAt = undefined;
       persistenceQueueRef.current.push(job);
     });
     updatePersistenceSnapshot();
@@ -1338,11 +2011,99 @@ function QuizPageContent() {
   );
 
   useEffect(() => {
+    if (persistenceRestoredRef.current) {
+      return;
+    }
+    persistenceRestoredRef.current = true;
+    const restored = readPersistedPersistenceState();
+    persistenceQueueRef.current = restored.pending;
+    persistenceFailedRef.current = restored.failed;
+    persistenceActiveRef.current = null;
+    updatePersistenceSnapshot();
+    processPersistenceQueue();
+  }, [processPersistenceQueue, updatePersistenceSnapshot]);
+
+  useEffect(() => {
     if (!isAuthenticated) {
       Toast.info("请先登录",500);
       router.replace("/login");
     }
   }, [isAuthenticated, router]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleOnline = () => {
+      processPersistenceQueue();
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        processPersistenceQueue();
+      }
+    };
+
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearUltimatePkThrottle();
+      clearPersistenceRetryTimer();
+    };
+  }, [clearPersistenceRetryTimer, clearUltimatePkThrottle, processPersistenceQueue]);
+
+  useEffect(() => {
+    if (!isUltimatePkMode) {
+      setUltimatePkTeam("affirmative");
+      setUltimatePkStageLocked(true);
+      setUltimatePkThrottleActive(false);
+      setUltimatePkSending(false);
+      clearUltimatePkThrottle();
+    }
+  }, [isUltimatePkMode, clearUltimatePkThrottle]);
+
+  useEffect(() => {
+    if (!isUltimatePkMode) return;
+    if (!ultimatePkCommandMessage) return;
+    const rawPayload = ultimatePkCommandMessage.payload ?? "";
+    if (!rawPayload.trim()) return;
+    let commandText = rawPayload.trim();
+    try {
+      const parsed = JSON.parse(rawPayload);
+      if (parsed && typeof parsed === "object") {
+        const source = parsed as Record<string, unknown>;
+        const candidate = source["command"] ?? source["type"] ?? source["action"];
+        if (typeof candidate === "string" && candidate.trim()) {
+          commandText = candidate.trim();
+        }
+      }
+    } catch {
+      // payload is plain text, ignore
+    }
+    const normalized = commandText.toLowerCase();
+    if (normalized === "stage-3") {
+      setUltimatePkStageLocked(false);
+      return;
+    }
+    if (
+      normalized === "stage-1" ||
+      normalized === "stage-2" ||
+      normalized === "stage-4" ||
+      normalized === "stage-5"
+    ) {
+      setUltimatePkStageLocked(true);
+      setUltimatePkThrottleActive(false);
+      setUltimatePkSending(false);
+      clearUltimatePkThrottle();
+    }
+  }, [
+    ultimatePkCommandMessage,
+    clearUltimatePkThrottle,
+    isUltimatePkMode,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1447,6 +2208,33 @@ function QuizPageContent() {
 
   const question = state.question;
   const questionId = question ? resolveQuestionId(question) : null;
+  const normalizedQuestion = useMemo(
+    () => findNormalizedQuestion(question, normalizedQuestions),
+    [question, normalizedQuestions]
+  );
+  const questionImageEntries = useMemo(
+    () => resolveQuestionImageEntries(question, normalizedQuestion),
+    [question, normalizedQuestion]
+  );
+  const hasQuestionImages = questionImageEntries.length > 0;
+  const isImageQuestion = useMemo(
+    () => isImageTypeQuestion(normalizedQuestion),
+    [normalizedQuestion]
+  );
+  const questionTags = useMemo(() => {
+    if (!question) return [];
+    if (isImageQuestion) {
+      return ["图片题"];
+    }
+    if (isStandardQuestion(question)) {
+      return [resolveStandardTypeLabel(question.type)];
+    }
+    if (isOceanQuestion(question)) {
+      const label = resolveOceanTypeLabel(question);
+      return label ? [label] : [];
+    }
+    return [];
+  }, [isImageQuestion, question]);
   const isWordbankQuestion =
     !!question && isStandardQuestion(question) && question.type === "wordbank";
   const isPointSelectQuestion =
@@ -1497,6 +2285,7 @@ function QuizPageContent() {
       };
     }
   }, [meta.id, questionId]);
+
 
   const wordbankOptionLabelMap = useMemo(() => {
     if (!isWordbankQuestion) {
@@ -1560,21 +2349,20 @@ function QuizPageContent() {
     }));
   }, [isPointSelectQuestion, pointSelectLabelMap, pointSelectValues]);
 
-  const debugAnswerText = useMemo(() => {
-    if (!DEBUG_SHOW_ANSWER || !question) {
+  const revealedAnswerText = useMemo(() => {
+    if (!isAnswerRevealActive || !question) {
       return null;
     }
-
     if (isStandardQuestion(question)) {
-      return formatStandardQuestionAnswer(question) ?? "无答案";
+      return formatStandardQuestionAnswer(question) ?? "暂无标准答案";
     }
-
     if (isOceanQuestion(question)) {
-      return formatOceanQuestionAnswer(question) ?? "无答案";
+      return formatOceanQuestionAnswer(question) ?? "暂无标准答案";
     }
+    return "暂无标准答案";
+  }, [isAnswerRevealActive, question]);
 
-    return "无答案";
-  }, [question]);
+  const answerBadgeText = isAnswerRevealActive ? revealedAnswerText : null;
 
   const selectionSummary = useMemo<{
     tokens: string[];
@@ -2078,25 +2866,14 @@ function QuizPageContent() {
   }, [answers, isMatchingQuestion, isPointSelectQuestion, question, questionId]);
 
   useEffect(() => {
-    if (questionId) {
-      setBoardOpen(false);
-      setBoardStatus("idle");
-      lastSubmitCommandRef.current = null;
-      setLockedWinnerId(null);
-    }
+    setFillPreview(null);
+    setCachedPaths(null);
+    setBoardOpen(false);
+    setBoardSubmitted(false);
+    setBoardUploading(false);
+    lastSubmitCommandRef.current = null;
+    setLockedWinnerId(null);
   }, [questionId]);
-
-  useEffect(() => {
-    if (isBoardOpen && boardStatus === "idle") {
-      setBoardStatus("waiting");
-    }
-  }, [isBoardOpen, boardStatus]);
-
-  useEffect(() => {
-    if (!isBoardOpen && boardStatus !== "success" && boardStatus !== "idle") {
-      setBoardStatus("idle");
-    }
-  }, [isBoardOpen, boardStatus]);
 
   useEffect(() => {
     if (
@@ -2111,28 +2888,35 @@ function QuizPageContent() {
     }
     let cache = fillSketchCacheRef.current[questionId];
     let preview = cache?.preview ?? null;
-    if (!preview) {
-      const token = typeof selected === "string" ? selected.trim() : "";
-      if (token) {
-        const stored = loadPreviewFromStorage(token);
-        if (stored) {
-          preview = stored;
-          fillSketchCacheRef.current[questionId] = {
-            ...(cache ?? {}),
-            preview: stored,
-          };
-          cache = fillSketchCacheRef.current[questionId];
-        }
+    const answerValue = answers[questionId]?.value;
+    let token = "";
+    if (typeof answerValue === "string") {
+      token = answerValue.trim();
+    } else if (Array.isArray(answerValue)) {
+      const first = answerValue.find((value) => typeof value === "string" && value.trim());
+      token = typeof first === "string" ? first.trim() : "";
+    }
+    if (!preview && token) {
+      const stored = loadPreviewFromStorage(token);
+      if (stored) {
+        preview = stored;
+        fillSketchCacheRef.current[questionId] = {
+          ...(cache ?? {}),
+          preview: stored,
+        };
+        cache = fillSketchCacheRef.current[questionId];
       }
     }
     setFillPreview(preview ?? null);
     setCachedPaths(cache?.paths ?? null);
-  }, [question, questionId, selected]);
+  }, [answers, question, questionId]);
 
   useEffect(() => {
     const previousId = lastQuestionIdRef.current;
     if (questionId && questionId !== previousId) {
       setCommandSubmissionLocked(false);
+      setCommandSubmissionOverlayVisible(false);
+      setAnswerRevealActive(false);
       setWordbankActiveIndex(null);
       setActiveMatchingLeft(null);
       lastQuestionIdRef.current = questionId;
@@ -2141,6 +2925,8 @@ function QuizPageContent() {
 
     if (!questionId) {
       setCommandSubmissionLocked(false);
+      setCommandSubmissionOverlayVisible(false);
+      setAnswerRevealActive(false);
       setWordbankActiveIndex(null);
       setActiveMatchingLeft(null);
       lastQuestionIdRef.current = null;
@@ -2362,15 +3148,15 @@ function QuizPageContent() {
 
   const handleWordbankBlankClick = useCallback(
     (index: number) => {
-      if (!state.answeringEnabled) return;
+      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
       setWordbankActiveIndex(index);
     },
-    [state.answeringEnabled]
+    [isCommandSubmissionLocked, state.answeringEnabled]
   );
 
   const handleWordbankClear = useCallback(
     (index: number) => {
-      if (!state.answeringEnabled) return;
+      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
       const next = [...wordbankValues];
       if (!next[index]) {
         setWordbankActiveIndex(index);
@@ -2380,12 +3166,12 @@ function QuizPageContent() {
       setSelected([...next]);
       setWordbankActiveIndex(index);
     },
-    [state.answeringEnabled, wordbankValues]
+    [isCommandSubmissionLocked, state.answeringEnabled, wordbankValues]
   );
 
   const handleWordbankSelectOption = useCallback(
     (optionValue: string, isUsed?: boolean) => {
-      if (!state.answeringEnabled || !wordbankTemplate) return;
+      if (!state.answeringEnabled || isCommandSubmissionLocked || !wordbankTemplate) return;
       if (isUsed) {
         return;
       }
@@ -2426,6 +3212,7 @@ function QuizPageContent() {
       }
     },
     [
+      isCommandSubmissionLocked,
       state.answeringEnabled,
       wordbankOptions,
       wordbankTemplate,
@@ -2436,7 +3223,9 @@ function QuizPageContent() {
 
   const handlePointSelectOption = useCallback(
     (optionValue: string) => {
-      if (!state.answeringEnabled || !isPointSelectQuestion) return;
+      if (!state.answeringEnabled || isCommandSubmissionLocked || !isPointSelectQuestion) {
+        return;
+      }
       const canonical = canonicalizeWordbankValue(optionValue, pointSelectOptions);
       if (!canonical) return;
       setSelected((prev) => {
@@ -2455,25 +3244,27 @@ function QuizPageContent() {
         return [...normalized, canonical];
       });
     },
-    [isPointSelectQuestion, pointSelectOptions, state.answeringEnabled]
+    [isCommandSubmissionLocked, isPointSelectQuestion, pointSelectOptions, state.answeringEnabled]
   );
 
   const handlePointSelectClear = useCallback(() => {
-    if (!state.answeringEnabled || !isPointSelectQuestion) return;
+    if (!state.answeringEnabled || isCommandSubmissionLocked || !isPointSelectQuestion) {
+      return;
+    }
     setSelected([]);
-  }, [isPointSelectQuestion, state.answeringEnabled]);
+  }, [isCommandSubmissionLocked, isPointSelectQuestion, state.answeringEnabled]);
 
   const handleMatchingLeftClick = useCallback(
     (leftId: string) => {
-      if (!state.answeringEnabled) return;
+      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
       setActiveMatchingLeft((prev) => (prev === leftId ? null : leftId));
     },
-    [state.answeringEnabled]
+    [isCommandSubmissionLocked, state.answeringEnabled]
   );
 
   const handleMatchingRightClick = useCallback(
     (rightId: string) => {
-      if (!state.answeringEnabled) return;
+      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
 
       if (activeMatchingLeft) {
         setMatchingPairs((prev) => {
@@ -2503,23 +3294,28 @@ function QuizPageContent() {
         }
       }
     },
-    [activeMatchingLeft, matchingConfig?.left, matchingSelectionMap, state.answeringEnabled]
+    [
+      activeMatchingLeft,
+      isCommandSubmissionLocked,
+      matchingConfig?.left,
+      matchingSelectionMap,
+      state.answeringEnabled,
+    ]
   );
 
   const handleClearMatchingPairs = useCallback(() => {
-    if (!state.answeringEnabled || matchingPairs.length === 0) {
+    if (!state.answeringEnabled || isCommandSubmissionLocked || matchingPairs.length === 0) {
       return;
     }
     setMatchingPairs([]);
     setActiveMatchingLeft(null);
-  }, [matchingPairs, state.answeringEnabled]);
+  }, [isCommandSubmissionLocked, matchingPairs, state.answeringEnabled]);
 
   const handleOpenBoard = useCallback(() => {
-    if (isBoardOpen || boardStatus === "success") return;
-    setBoardStatus("waiting");
+    if (isBoardOpen || boardSubmitted || isCommandSubmissionLocked) return;
     lastSubmitCommandRef.current = null;
     setBoardOpen(true);
-  }, [boardStatus, isBoardOpen]);
+  }, [boardSubmitted, isBoardOpen, isCommandSubmissionLocked]);
 
   const handleBoardPathsChange = useCallback(
     (paths: SmoothSerializedStroke[]) => {
@@ -2560,7 +3356,8 @@ function QuizPageContent() {
       savePreviewToStorage(token, preview);
       setFillPreview(preview);
       setCachedPaths(paths);
-      setBoardStatus("success");
+      setBoardSubmitted(true);
+      setBoardUploading(false);
     },
     [question, questionId]
   );
@@ -2703,7 +3500,7 @@ function QuizPageContent() {
             return;
           }
           submissionValue = value;
-          questionSheetAnswer = value || "空画板";
+          questionSheetAnswer = value || EMPTY_BOARD_PLACEHOLDER_URL;
         } else {
           const value =
             typeof resolvedSelection === "string" ? resolvedSelection : "";
@@ -2785,22 +3582,23 @@ function QuizPageContent() {
               normalizedQuestion,
               currentQuestionIndex
             );
-            const persistenceJobs: Array<() => Promise<unknown>> = [];
+            const persistenceTasks: PersistenceTask[] = [];
             const timeFieldValue =
               meta.id === "speed-run" && speedRunRemainingSeconds !== undefined
                 ? String(speedRunRemainingSeconds)
                 : undefined;
 
             if (questionSheetId && questionRecordId && userId) {
-              persistenceJobs.push(() =>
-                submitAnswerChoice({
+              persistenceTasks.push({
+                type: "answer-choice",
+                params: {
                   datasheetId: questionSheetId,
                   recordId: questionRecordId,
                   userId,
                   fieldKey: userId,
                   answer: answerForSheet,
-                })
-              );
+                },
+              });
             }
 
             if (scoreSheetId && scoreRecordId && scoreFieldKey) {
@@ -2820,8 +3618,9 @@ function QuizPageContent() {
                   }
                 }
               }
-              persistenceJobs.push(() =>
-                submitJudgeResult({
+              persistenceTasks.push({
+                type: "judge-result",
+                params: {
                   datasheetId: scoreSheetId,
                   recordId: scoreRecordId,
                   questionId: scoreFieldKey,
@@ -2830,28 +3629,17 @@ function QuizPageContent() {
                   light: lightValue,
                   statusFieldKey,
                   status: statusValue,
-                })
-              );
+                },
+              });
             }
 
-            if (persistenceJobs.length > 0) {
+            if (persistenceTasks.length > 0) {
               const job: PersistenceJob = {
                 id: `${requestId}-sync`,
                 label: `题目同步（${resolveQuestionId(currentQuestion)}）`,
                 createdAt: Date.now(),
                 attempts: 0,
-                execute: async () => {
-                  await withTimeout(
-                    Promise.all(persistenceJobs.map((task) => task())),
-                    PERSISTENCE_TIMEOUT_MS,
-                    () =>
-                      new QuizApiError(
-                        "timeout",
-                        "答题记录同步超时",
-                        "请在同步队列中手动重试"
-                      )
-                  );
-                },
+                tasks: persistenceTasks,
               };
               enqueuePersistenceJob(job);
             }
@@ -2871,8 +3659,11 @@ function QuizPageContent() {
           };
           if (source === "command") {
             setCommandSubmissionLocked(true);
+            setCommandSubmissionOverlayVisible(true);
+            setAnswerRevealActive(false);
           } else {
             setCommandSubmissionLocked(false);
+            setCommandSubmissionOverlayVisible(false);
             if (showCorrectness) {
               if (isCorrect === true) {
                 Notify.success({
@@ -2888,13 +3679,21 @@ function QuizPageContent() {
                 });
               } else {
                 Notify.info({
-                  content: "答案已提交",
+                  content:
+                    meta.id === "ocean-adventure"
+                      ? "答案已提交"
+                      : "答案已记录，正在同步",
                   style: notifyStyle,
                   duration: 500,
                 });
               }
             } else {
-              Toast.success("答案已提交");
+              Toast.success(
+                (shouldHandleSubmitCommand || meta.id === "speed-run") &&
+                  isStandardQuestion(currentQuestion)
+                  ? "答案已记录，正在同步"
+                  : "答案已提交"
+              );
             }
           }
 
@@ -2953,8 +3752,6 @@ function QuizPageContent() {
       state.answeringEnabled,
       state.questionIndex,
       state.timeRemaining,
-      submitAnswerChoice,
-      submitJudgeResult,
       question,
       user?.id,
       isSubmitting,
@@ -3072,6 +3869,8 @@ function QuizPageContent() {
     if (isNumericCommand) {
       lastCommandHandledRef.current = commandMessage.timestamp;
       setCommandSubmissionLocked(false);
+      setCommandSubmissionOverlayVisible(false);
+      setAnswerRevealActive(false);
       if (meta.id === "ultimate-challenge") {
         resetUltimateRoundControl?.();
         setCanBuzz(false);
@@ -3081,13 +3880,21 @@ function QuizPageContent() {
       return;
     }
 
+    if (normalizedCommand === "answer") {
+      lastCommandHandledRef.current = commandMessage.timestamp;
+      setCommandSubmissionOverlayVisible(false);
+      setAnswerRevealActive(true);
+      setCommandSubmissionLocked(true);
+      return;
+    }
+
     if (normalizedCommand === "retract") {
       lastCommandHandledRef.current = commandMessage.timestamp;
       void handleRetractCommand();
       return;
     }
 
-    if (boardStatus === "uploading" || boardStatus === "success") return;
+    if (isBoardUploading || boardSubmitted) return;
 
     if (!shouldHandleSubmitCommand) return;
     if (normalizedCommand !== "submit") return;
@@ -3101,11 +3908,11 @@ function QuizPageContent() {
           Toast.warn("画板尚未打开，无法提交");
           return;
         }
+        setBoardUploading(true);
         try {
           Toast.info("正在上传画板");
-          setBoardStatus("uploading");
           const result = await boardRef.current.exportAndUpload();
-          setBoardStatus("success");
+          setBoardSubmitted(true);
           await handleSubmit(
             { allowEmpty: true, source: "command" },
             result.token
@@ -3113,13 +3920,14 @@ function QuizPageContent() {
           setBoardOpen(false);
         } catch (error) {
           if (error instanceof FillDrawingBoardEmptyError) {
-            setBoardStatus("success");
+            setBoardSubmitted(true);
             setBoardOpen(false);
             await handleSubmit({ allowEmpty: true, source: "command" });
-            return;
+          } else {
+            console.error("画板上传失败", error);
           }
-          console.error("画板上传失败", error);
-          setBoardStatus("error");
+        } finally {
+          setBoardUploading(false);
         }
         return;
       }
@@ -3128,15 +3936,58 @@ function QuizPageContent() {
 
     void executeSubmission();
   }, [
-    boardStatus,
+    boardSubmitted,
     boardRef,
     commandMessage,
     handleRetractCommand,
     handleSubmit,
+    isBoardUploading,
     meta.id,
     question,
     resetUltimateRoundControl,
     shouldHandleSubmitCommand,
+  ]);
+
+  const handleUltimatePkTeamSelect = useCallback((team: "affirmative" | "negative") => {
+    setUltimatePkTeam(team);
+  }, []);
+
+  const handleUltimatePkSwitch = useCallback(() => {
+    if (!isUltimatePkMode) return;
+    if (ultimatePkStageLocked) {
+      Toast.warn("主持人尚未允许切换");
+      return;
+    }
+    if (ultimatePkThrottleActive) {
+      Toast.info("切换冷却中，请稍候");
+      return;
+    }
+    if (!mqttService.isConnected()) {
+      Toast.warn(
+        mqttConnected ? "实时服务暂不可用，请稍后再试" : "尚未连接实时服务，请稍后重试"
+      );
+      return;
+    }
+
+    const payload = ultimatePkTeam === "affirmative" ? "switch-blue" : "switch-red";
+    setUltimatePkSending(true);
+    try {
+      mqttService.publish(MQTT_TOPICS.command, payload, { qos: 1 });
+      scheduleUltimatePkThrottle();
+      Toast.success("切换指令已发送", 600);
+    } catch (error) {
+      console.error("Failed to publish ultimate PK switch command", error);
+      Toast.error("切换指令发送失败");
+    } finally {
+      setUltimatePkSending(false);
+    }
+  }, [
+    isUltimatePkMode,
+    mqttConnected,
+    scheduleUltimatePkThrottle,
+    ultimatePkStageLocked,
+    ultimatePkTeam,
+    ultimatePkThrottleActive,
   ]);
 
   const handleApplyJudgement = (result: "correct" | "wrong") => {
@@ -3183,6 +4034,14 @@ function QuizPageContent() {
       </div>
       <p className={styles.commandSubmissionTitle}>提交成功</p>
       <p className={styles.commandSubmissionSubtitle}>请等待大屏公示</p>
+    </div>
+  );
+
+  const renderCommandSubmissionOverlay = () => (
+    <div className={styles.commandSubmissionOverlay} role="status" aria-live="polite">
+      <div className={styles.commandSubmissionOverlayInner}>
+        {renderCommandSubmissionResult()}
+      </div>
     </div>
   );
 
@@ -3418,6 +4277,43 @@ function QuizPageContent() {
   );
 
   const renderStandardOptions = (standard: StandardQuestion) => {
+    const isRevealSupportedType = ["single", "multiple", "indeterminate", "boolean"].includes(
+      standard.type
+    );
+    const rawSelectionValues =
+      Array.isArray(selected) && selected.length > 0
+        ? selected
+        : typeof selected === "string" && selected
+        ? [selected]
+        : [];
+    const selectionValueSet = new Set(
+      rawSelectionValues.map((value) => String(value).trim()).filter(Boolean)
+    );
+    const rawCorrectValues =
+      isRevealSupportedType && isAnswerRevealActive
+        ? Array.isArray(standard.correctAnswer)
+          ? standard.correctAnswer
+          : standard.correctAnswer
+          ? [standard.correctAnswer]
+          : []
+        : [];
+    const correctValueSet =
+      rawCorrectValues.length > 0
+        ? new Set(rawCorrectValues.map((value) => String(value).trim()).filter(Boolean))
+        : null;
+    const resolveOptionStatus = (optionValue: string): "correct" | "wrong" | undefined => {
+      if (!correctValueSet) return undefined;
+      const normalized = String(optionValue).trim();
+      if (!normalized) return undefined;
+      if (correctValueSet.has(normalized)) {
+        return "correct";
+      }
+      if (selectionValueSet.has(normalized)) {
+        return "wrong";
+      }
+      return undefined;
+    };
+
     if (standard.type === "matching") {
       const config = standard.matching;
       const leftOptions = config?.left ?? [];
@@ -3478,7 +4374,7 @@ function QuizPageContent() {
                           .filter(Boolean)
                           .join(" ")}
                         onClick={() => handleMatchingLeftClick(leftItem.id)}
-                        disabled={!state.answeringEnabled}
+                        disabled={!state.answeringEnabled || isCommandSubmissionLocked}
                         data-left-id={leftItem.id}
                         data-active={isActive ? "true" : undefined}
                         data-match-right-id={matchedRightId ?? undefined}
@@ -3508,7 +4404,8 @@ function QuizPageContent() {
                     activeLeft &&
                     assignedLeftId &&
                     activeLeft !== assignedLeftId &&
-                    state.answeringEnabled;
+                    state.answeringEnabled &&
+                    !isCommandSubmissionLocked;
 
                   return (
                     <button
@@ -3522,7 +4419,7 @@ function QuizPageContent() {
                         .filter(Boolean)
                         .join(" ")}
                       onClick={() => handleMatchingRightClick(rightItem.id)}
-                      disabled={!state.answeringEnabled}
+                      disabled={!state.answeringEnabled || isCommandSubmissionLocked}
                       data-right-id={rightItem.id}
                       data-assigned-left-id={assignedLeftId ?? undefined}
                       data-matched={isUsed ? "true" : undefined}
@@ -3555,9 +4452,10 @@ function QuizPageContent() {
                 description={option.description}
                 badge={String.fromCharCode(65 + index)}
                 active={isActive}
-                disabled={!state.answeringEnabled}
+                disabled={!state.answeringEnabled || isCommandSubmissionLocked}
                 onSelect={toggleMultiOption}
                 role="checkbox"
+                status={resolveOptionStatus(option.value)}
               />
             );
           })}
@@ -3587,7 +4485,7 @@ function QuizPageContent() {
                 type="button"
                 className={buttonClass}
                 onClick={() => handleWordbankSelectOption(option.value, isUsed)}
-                disabled={!state.answeringEnabled}
+                disabled={!state.answeringEnabled || isCommandSubmissionLocked}
               >
                 <span className={styles.wordbankOptionBadge}>{option.value}</span>
                 <span className={styles.wordbankOptionLabel}>{option.label}</span>
@@ -3615,7 +4513,7 @@ function QuizPageContent() {
                 type="button"
                 className={buttonClass}
                 onClick={() => handlePointSelectOption(option.value)}
-                disabled={!state.answeringEnabled}
+                disabled={!state.answeringEnabled || isCommandSubmissionLocked}
                 aria-pressed={isSelected}
               >
                 <span className={styles.pointSelectOptionLabel}>{option.label}</span>
@@ -3627,11 +4525,9 @@ function QuizPageContent() {
     }
 
     if (standard.type === "fill") {
-      const hasToken =
-        typeof selected === "string" && selected.trim().length > 0;
       return (
         <div className={styles.blankBoard}>
-          {!fillPreview && boardStatus !== "success" ? (
+          {!fillPreview && !boardSubmitted ? (
             <Button
               type="primary"
               size="large"
@@ -3639,8 +4535,9 @@ function QuizPageContent() {
               onClick={handleOpenBoard}
               disabled={
                 !state.answeringEnabled ||
+                isCommandSubmissionLocked ||
                 isBoardOpen ||
-                boardStatus === "uploading"
+                isBoardUploading
               }
             >
               打开画板
@@ -3649,7 +4546,7 @@ function QuizPageContent() {
           {fillPreview ? (
             <>
               <div className={styles.boardPreview}>
-                <Image
+                <NextImage
                   src={fillPreview}
                   alt="画板作答预览"
                   className={styles.boardPreviewImage}
@@ -3670,11 +4567,6 @@ function QuizPageContent() {
               </div>
             </>
           ) : null}
-          {fillPreview && hasToken ? (
-            <span className={`${styles.boardStatus} ${styles.boardStatusReady}`}>
-              已生成答案链接
-            </span>
-          ) : null}
         </div>
       );
     }
@@ -3692,9 +4584,10 @@ function QuizPageContent() {
               description={option.description}
               badge={String.fromCharCode(65 + index)}
               active={isActive}
-              disabled={!state.answeringEnabled}
+              disabled={!state.answeringEnabled || isCommandSubmissionLocked}
               onSelect={handleSelect}
               role="radio"
+              status={resolveOptionStatus(option.value)}
             />
           );
         })}
@@ -3723,7 +4616,32 @@ function QuizPageContent() {
             ocean.optionPool
           );
 
+    const normalizedSelectionSet = new Set(
+      values.map((value) => String(value).trim()).filter(Boolean)
+    );
+    const normalizedCorrectSet =
+      isAnswerRevealActive &&
+      Array.isArray(ocean.correctAnswerIds) &&
+      ocean.correctAnswerIds.length > 0
+        ? new Set(ocean.correctAnswerIds.map((id) => String(id).trim()).filter(Boolean))
+        : null;
+    const resolveOptionStatus = (optionId: string): "correct" | "wrong" | undefined => {
+      if (!normalizedCorrectSet) return undefined;
+      const normalized = String(optionId).trim();
+      if (!normalized) return undefined;
+      if (normalizedCorrectSet.has(normalized)) {
+        return "correct";
+      }
+      if (normalizedSelectionSet.has(normalized)) {
+        return "wrong";
+      }
+      return undefined;
+    };
+
     const handleOceanSelect = (optionId: string) => {
+      if (!state.answeringEnabled || isCommandSubmissionLocked) {
+        return;
+      }
       if (selectionMode === "single") {
         setSelected((prev) => {
           const previousValue =
@@ -3770,9 +4688,10 @@ function QuizPageContent() {
               }
               badge={String.fromCharCode(65 + index)}
               active={isActive}
-              disabled={!state.answeringEnabled}
+              disabled={!state.answeringEnabled || isCommandSubmissionLocked}
               onSelect={handleOceanSelect}
               role={selectionMode === "single" ? "radio" : "checkbox"}
+              status={resolveOptionStatus(option.id)}
             />
           );
         })}
@@ -3780,7 +4699,91 @@ function QuizPageContent() {
     );
   };
 
+  const renderQuestionIllustration = () => {
+    if (!hasQuestionImages) {
+      return null;
+    }
+    return <QuestionImageGallery entries={questionImageEntries} />;
+  };
+
+  const renderUltimatePkContent = () => {
+    const teamOptions: Array<{
+      id: "affirmative" | "negative";
+      label: string;
+      toneClass: string;
+    }> = [
+      { id: "affirmative", label: "正方", toneClass: styles.ultimatePkTeamPositive },
+      { id: "negative", label: "反方", toneClass: styles.ultimatePkTeamNegative },
+    ];
+    const buttonDisabled =
+      ultimatePkStageLocked || ultimatePkThrottleActive || ultimatePkSending;
+    const statusText = ultimatePkStageLocked
+      ? "等待主持人允许切换"
+      : ultimatePkThrottleActive
+        ? "切换冷却中，请稍候"
+        : ultimatePkSending
+          ? "正在发送切换指令..."
+          : "当前可切换发言队伍";
+    const statusClass = ultimatePkStageLocked
+      ? styles.ultimatePkStatusLocked
+      : ultimatePkThrottleActive || ultimatePkSending
+        ? styles.ultimatePkStatusCooling
+        : styles.ultimatePkStatusReady;
+
+    return (
+      <div className={styles.ultimatePkPanel}>
+        <div className={styles.ultimatePkTeamSelector} role="radiogroup" aria-label="请选择发言队伍">
+          {teamOptions.map((team) => {
+            const active = ultimatePkTeam === team.id;
+            return (
+              <button
+                key={team.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                className={`${styles.ultimatePkTeamButton} ${team.toneClass} ${
+                  active ? styles.ultimatePkTeamButtonActive : ""
+                }`}
+                onClick={() => handleUltimatePkTeamSelect(team.id)}
+              >
+                {team.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className={styles.ultimatePkSwitchWrapper}>
+          <button
+            type="button"
+            className={`${styles.ultimatePkSwitchButton} ${
+              buttonDisabled ? styles.ultimatePkSwitchButtonDisabled : ""
+            }`}
+            onClick={handleUltimatePkSwitch}
+            disabled={buttonDisabled}
+            aria-busy={ultimatePkSending}
+          >
+            <SwitchArrowsIcon className={styles.ultimatePkSwitchIcon} />
+            <span className={styles.ultimatePkSwitchLabel}>切换发言</span>
+          </button>
+        </div>
+        <p className={styles.ultimatePkHint}>
+          点击按钮进行切换发言
+          <br />
+          <span>1 秒内仅可切换一次</span>
+        </p>
+        <p className={`${styles.ultimatePkStatusText} ${statusClass}`} aria-live="polite">
+          {statusText}
+        </p>
+      </div>
+    );
+  };
+
   const renderQuestionContent = () => {
+    const shouldShowCommandOverlay =
+      isCommandSubmissionLocked && isCommandSubmissionOverlayVisible;
+    if (isUltimatePkMode) {
+      return renderUltimatePkContent();
+    }
+
     if (meta.id === "speed-run" && isSpeedRunFinished) {
       return renderSpeedRunResult();
     }
@@ -3940,7 +4943,7 @@ function QuizPageContent() {
                         ? handleWordbankClear(blankIndex)
                         : handleWordbankBlankClick(blankIndex)
                     }
-                    disabled={!state.answeringEnabled}
+                    disabled={!state.answeringEnabled || isCommandSubmissionLocked}
                   >
                     {label ? (
                       <span className={styles.wordbankBlankValue}>{label}</span>
@@ -3964,7 +4967,8 @@ function QuizPageContent() {
                 </span>
               ))
             : "请完成连线";
-          const isClearDisabled = !state.answeringEnabled || matchingPairs.length === 0;
+          const isClearDisabled =
+            !state.answeringEnabled || isCommandSubmissionLocked || matchingPairs.length === 0;
           return (
             <div className={styles.questionTitleRow}>
               <h2 className={styles.questionTitle}>{matchingTitleContent}</h2>
@@ -4019,6 +5023,8 @@ function QuizPageContent() {
         return <h2 className={styles.questionTitle}>{question.title}</h2>;
       })();
         const optionsNode = renderStandardOptions(question);
+        const shouldShowStandardOverlay =
+          question.type !== "fill" && shouldShowCommandOverlay;
         const pointSelectInputNode =
           isPointSelectQuestion && isStandardQuestion(question) ? (
             <div className={styles.pointSelectArea}>
@@ -4052,20 +5058,24 @@ function QuizPageContent() {
           <>
             <div className={styles.questionHeader}>
               <div className={styles.questionHeaderLeft}>
-                <span className={styles.questionTag}>{resolveStandardTypeLabel(question.type)}</span>
-                  {debugAnswerText ? (
-                    <span className={`${styles.questionTag} ${styles.answerTag}`}>
-                      <span className={styles.answerTagLabel}>答案：</span>
-                      <span className={styles.answerTagValue}>{debugAnswerText}</span>
-                    </span>
-                  ) : null}
-                </div>
+                {questionTags.map((tag) => (
+                  <span key={tag} className={styles.questionTag}>
+                    {tag}
+                  </span>
+                ))}
+                {answerBadgeText ? (
+                  <span className={`${styles.questionTag} ${styles.answerTag}`}>
+                    <span className={styles.answerTagLabel}>答案：</span>
+                    <span className={styles.answerTagValue}>{answerBadgeText}</span>
+                  </span>
+                ) : null}
+              </div>
                 <div className={styles.questionHeaderRight}>
-                  {selectionSummary ? (
+                  {selectionSummary && !isImageQuestion ? (
                     <div
                       className={styles.selectionSummary}
-                  title={
-                    selectionSummary.tokens.length
+                    title={
+                      selectionSummary.tokens.length
                       ? selectionSummary.tokens.join(" ")
                       : selectionSummary.emptyLabel ?? "未选"
                   }
@@ -4093,12 +5103,12 @@ function QuizPageContent() {
             </div>
           </div>
           {questionTitleNode}
+          {renderQuestionIllustration()}
           {pointSelectInputNode}
-          {isCommandSubmissionLocked && question.type !== "fill" ? (
-            renderCommandSubmissionResult()
-          ) : (
-            <div className={styles.options}>{optionsNode}</div>
-          )}
+          <div className={styles.options}>
+            {optionsNode}
+            {shouldShowStandardOverlay ? renderCommandSubmissionOverlay() : null}
+          </div>
         </>
       );
     }
@@ -4108,16 +5118,20 @@ function QuizPageContent() {
         <>
           <div className={styles.questionHeader}>
             <div className={styles.questionHeaderLeft}>
-              <span className={styles.questionTag}>{resolveOceanTypeLabel(question)}</span>
-              {debugAnswerText ? (
+              {questionTags.map((tag) => (
+                <span key={tag} className={styles.questionTag}>
+                  {tag}
+                </span>
+              ))}
+              {answerBadgeText ? (
                 <span className={`${styles.questionTag} ${styles.answerTag}`}>
                   <span className={styles.answerTagLabel}>答案：</span>
-                  <span className={styles.answerTagValue}>{debugAnswerText}</span>
+                  <span className={styles.answerTagValue}>{answerBadgeText}</span>
                 </span>
               ) : null}
             </div>
             <div className={styles.questionHeaderRight}>
-              {selectionSummary ? (
+              {selectionSummary && !isImageQuestion ? (
                 <div
                   className={styles.selectionSummary}
                   title={
@@ -4149,18 +5163,18 @@ function QuizPageContent() {
             </div>
           </div>
           <h2 className={styles.questionTitle}>{question.stem}</h2>
+          {renderQuestionIllustration()}
           <div className={styles.categories}>
-            {question.categories.map((category) => (
-              <Tag key={category} type="primary" size="small" filleted className={styles.categoryTag}>
-                {category}
-              </Tag>
-            ))}
+          {question.categories.map((category) => (
+            <Tag key={category} type="primary" size="small" filleted className={styles.categoryTag}>
+              {category}
+            </Tag>
+          ))}
+        </div>
+          <div className={styles.options}>
+            {renderOceanOptions(question)}
+            {shouldShowCommandOverlay ? renderCommandSubmissionOverlay() : null}
           </div>
-          {isCommandSubmissionLocked ? (
-            renderCommandSubmissionResult()
-          ) : (
-            <div className={styles.options}>{renderOceanOptions(question)}</div>
-          )}
         </>
       );
     }
@@ -4235,7 +5249,7 @@ function QuizPageContent() {
     return name || meta.name || meta.id;
   }, [currentStage?.displayName, currentStage?.name, meta.id, meta.name]);
   const hasQuestion = Boolean(question);
-  const showQuestionLoading = meta.questionFlow === "push" && !questionGateOpened;
+  const showQuestionLoading = !isUltimatePkMode && meta.questionFlow === "push" && !questionGateOpened;
   const submitLabel =
     meta.id === "speed-run"
       ? "提交并进入下一题"
@@ -4312,13 +5326,14 @@ function QuizPageContent() {
               </div>
             ) : null}
           </div>
-          <section className={styles.progressCard}>
-            <div className={styles.progressHead}>
-              <span className={styles.progressCounter}>
-                {hasQuestion ? questionOrdinal : 0}
-                {meta.id === "ocean-adventure" ? (
-                  <span className={styles.progressTotal}>
-                    {" / "}
+          {!isUltimatePkMode ? (
+            <section className={styles.progressCard}>
+              <div className={styles.progressHead}>
+                <span className={styles.progressCounter}>
+                  {hasQuestion ? questionOrdinal : 0}
+                  {meta.id === "ocean-adventure" ? (
+                    <span className={styles.progressTotal}>
+                      {" / "}
                     {oceanRemainingDisplay ?? DEFAULT_OCEAN_REMAINING_COUNT}
                   </span>
                 ) : showProgress && totalQuestions ? (
@@ -4360,19 +5375,24 @@ function QuizPageContent() {
                   <span className={styles.progressUser}>{progressUserLabel}</span>
                 ) : null}
               </div>
-            </div>
-           {showProgress ? (
-             <div className={styles.progressBar}>
-                <Progress
-                  percentage={progressValue}
-                  percentPosition="innerLeft"
-                  mountedTransition={progressValue > 0}
-                />
               </div>
-            ) : null}
-          </section>
+             {showProgress ? (
+               <div className={styles.progressBar}>
+                  <Progress
+                    percentage={progressValue}
+                    percentPosition="innerLeft"
+                    mountedTransition={progressValue > 0}
+                  />
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
-          <section className={styles.questionCard}>
+          <section
+            className={
+              isUltimatePkMode ? `${styles.questionCard} ${styles.ultimatePkCard}` : styles.questionCard
+            }
+          >
             {showQuestionLoading ? renderQuestionLoadingState() : renderQuestionContent()}
           </section>
         {meta.features.hasHp &&
@@ -4423,6 +5443,7 @@ function QuizPageContent() {
         ) : null}
 
         <FillDrawingBoard
+          key={questionId ?? "board"}
           ref={boardRef}
           open={isBoardOpen}
           questionId={questionId}
@@ -4434,8 +5455,7 @@ function QuizPageContent() {
           onUploadSuccess={handleBoardUploadSuccess}
           onPathsChange={handleBoardPathsChange}
           initialPaths={cachedPaths}
-          disabled={!state.answeringEnabled}
-          status={boardStatus}
+          disabled={!state.answeringEnabled || isCommandSubmissionLocked}
         />
       </ArcoClient>
     </div>

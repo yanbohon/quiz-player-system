@@ -48,6 +48,7 @@ function resolveStageKind(name?: string): StageKind {
     case "题海遨游":
       return "grab";
     case "有问必答":
+    case "火眼金睛":
     case "一站到底":
     case "争分夺秒":
     case "终极挑战":
@@ -60,6 +61,9 @@ function resolveStageKind(name?: string): StageKind {
           return "unknown";
         }
         if (/^有问必答/u.test(trimmed)) {
+          return "standard";
+        }
+        if (/^火眼金睛/u.test(trimmed)) {
           return "standard";
         }
         if (/^争分夺秒/u.test(trimmed)) {

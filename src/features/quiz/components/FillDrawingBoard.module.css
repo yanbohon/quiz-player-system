@@ -121,17 +121,6 @@
   word-break: break-word;
 }
 
-.errorBadge {
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: rgba(248, 113, 113, 0.25);
-  color: #fecaca;
-  font-size: 13px;
-  line-height: 1.4;
-  max-width: min(70vw, 520px);
-  text-align: left;
-}
-
 .topRight {
   pointer-events: auto;
   flex-shrink: 0;

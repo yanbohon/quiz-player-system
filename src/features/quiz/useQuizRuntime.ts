@@ -28,7 +28,7 @@ import {
 
 type ModeIdInput = ContestModeId | string | null | undefined;
 
-const SPEED_RUN_TIME_LIMIT = 3 * 60; // 3 minutes
+const SPEED_RUN_TIME_LIMIT = 2 * 60; // 3 minutes
 const OCEAN_TIME_LIMIT = 5 * 60; // 5 minutes
 
 function resolveMode(id: ModeIdInput): ContestModeMeta {

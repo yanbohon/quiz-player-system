@@ -865,12 +865,56 @@
   white-space: pre-line;
 }
 
+.questionImageContainer {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.questionImageGrid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.questionImageThumbButton {
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: #f1f5f9;
+  position: relative;
+  cursor: pointer;
+}
+
+.questionImageThumbButton:disabled {
+  cursor: default;
+}
+
+.questionImageThumbImage {
+  width: 100%;
+  height: 100%;
+}
+
+.questionImageFallback {
+  font-size: 14px;
+  color: #64748b;
+  text-align: center;
+}
+
 .options {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 16px;
   width: 100%;
+  position: relative;
 }
 
 .optionGroup {
@@ -904,6 +948,18 @@
   box-shadow: 0 12px 24px rgba(37, 99, 235, 0.18);
 }
 
+.optionCardCorrect {
+  border-color: #16a34a;
+  background: rgba(34, 197, 94, 0.12);
+  box-shadow: 0 14px 26px rgba(16, 185, 129, 0.25);
+}
+
+.optionCardWrong {
+  border-color: #dc2626;
+  background: rgba(248, 113, 113, 0.14);
+  box-shadow: 0 14px 26px rgba(220, 38, 38, 0.2);
+}
+
 .optionCard:disabled {
   cursor: not-allowed;
   opacity: 0.6;
@@ -932,6 +988,16 @@
 
 .optionBadgeActive {
   background: #2563eb;
+  color: #ffffff;
+}
+
+.optionBadgeCorrect {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+.optionBadgeWrong {
+  background: #dc2626;
   color: #ffffff;
 }
 
@@ -989,15 +1055,6 @@
   background: #ffffff;
   object-fit: contain;
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
-}
-
-.boardStatus {
-  font-size: 13px;
-  color: #475569;
-}
-
-.boardStatusReady {
-  color: #2563eb;
 }
 
 .boardSubmitted {
@@ -1141,6 +1198,144 @@
 .ultimateBuzzerText {
   font-size: 50px!important;
   letter-spacing: 0.08em!important;
+}
+
+.ultimatePkCard {
+  padding: 36px 32px;
+}
+
+.ultimatePkPanel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  align-items: center;
+}
+
+.ultimatePkTeamSelector {
+  width: 100%;
+  display: flex;
+  gap: 16px;
+}
+
+.ultimatePkTeamButton {
+  flex: 1;
+  height: 76px;
+  border-radius: 22px;
+  border: none;
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  background: linear-gradient(180deg, #f87171 0%, #ef4444 100%);
+  opacity: 0.2;
+  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.2);
+  transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ultimatePkTeamButton:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.65);
+  outline-offset: 3px;
+}
+
+.ultimatePkTeamButtonActive {
+  opacity: 1;
+  transform: translateY(-3px);
+  box-shadow: 0 22px 34px rgba(15, 23, 42, 0.22);
+}
+
+.ultimatePkTeamPositive {
+  background: linear-gradient(180deg, #FF7F7D 0%, #F21248 100%);
+  height: 150px;
+}
+
+.ultimatePkTeamNegative {
+  background: linear-gradient(180deg, #00B5FF 0%, #0067f6 100%);
+  height: 150px;
+}
+
+.ultimatePkSwitchWrapper {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 50px;
+}
+
+.ultimatePkSwitchButton {
+  width: min(420px, 78vw);
+  height: min(420px, 78vw);
+  border-radius: 50%;
+  border: none;
+  background: radial-gradient(circle at 30% 30%, #ffe690, #fbbf24);
+  color: #0f172a;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 30px 60px rgba(251, 191, 36, 0.45);
+  cursor: pointer;
+  font-weight: 700;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.ultimatePkSwitchButton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ultimatePkSwitchButton:disabled {
+  cursor: not-allowed;
+}
+
+.ultimatePkSwitchButtonDisabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  background: radial-gradient(circle at 30% 30%, #f8fafc, #dbeafe);
+  box-shadow: 0 20px 36px rgba(148, 163, 184, 0.35);
+}
+
+.ultimatePkSwitchIcon {
+  width: min(110px, 20vw);
+  height: min(110px, 20vw);
+  color: #0f172a;
+}
+
+.ultimatePkSwitchLabel {
+  font-size: 24px;
+  letter-spacing: 0.16em;
+}
+
+.ultimatePkHint {
+  margin: 0;
+  text-align: center;
+  color: #475569;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.ultimatePkHint span {
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.ultimatePkStatusText {
+  margin: 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ultimatePkStatusLocked {
+  color: #f87171;
+}
+
+.ultimatePkStatusCooling {
+  color: #f97316;
+}
+
+.ultimatePkStatusReady {
+  color: #16a34a;
 }
 
 .ultimateDecision {
@@ -1322,6 +1517,27 @@
   color: #b91c1c;
 }
 
+.commandSubmissionOverlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 2;
+  backdrop-filter: blur(2px);
+}
+
+.commandSubmissionOverlayInner {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
 .commandSubmissionResult {
   padding: 56px 0;
   display: flex;
@@ -1352,13 +1568,13 @@
   margin: 0;
   font-size: 50px;
   font-weight: 700;
-  color: #0f172a;
+  color: #ffffff;
 }
 
 .commandSubmissionSubtitle {
   margin: 0;
   font-size: 20px;
-  color: #64748b;
+  color: #ffffff;
   line-height: 1.6;
   max-width: 280px;
 }
@@ -1460,6 +1676,15 @@
     font-size: 18px;
   }
 
+  .questionImageContainer {
+    margin-top: 16px;
+  }
+
+  .questionImageWrapper {
+    max-width: 100%;
+    border-radius: 12px;
+  }
+
   .optionCard {
     padding: 16px 14px;
   }
@@ -1485,6 +1710,15 @@
     height: 56px;
   }
 
+  .commandSubmissionOverlay {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .commandSubmissionOverlayInner {
+    gap: 12px;
+  }
+
   .oceanResultWrapper {
     gap: 24px;
     padding-bottom: 16px;
@@ -1507,5 +1741,30 @@
 
   .ultimateBuzzerText {
     font-size: 24px;
+  }
+
+  .ultimatePkCard {
+    padding: 28px 16px;
+  }
+
+  .ultimatePkTeamButton {
+    height: 60px;
+    font-size: 20px;
+    letter-spacing: 0.08em;
+  }
+
+  .ultimatePkSwitchButton {
+    width: min(320px, 82vw);
+    height: min(320px, 82vw);
+  }
+
+  .ultimatePkSwitchIcon {
+    width: min(88px, 24vw);
+    height: min(88px, 24vw);
+  }
+
+  .ultimatePkSwitchLabel {
+    font-size: 20px;
+    letter-spacing: 0.1em;
   }
 }

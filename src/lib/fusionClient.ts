@@ -83,7 +83,8 @@ type FusionFetchOptions = RequestInit & {
 
 const SUBMIT_MIN_INTERVAL_MS = 1000;
 const SUBMIT_MAX_ATTEMPTS = 3;
-const SUBMIT_RETRY_DELAY_MS = 600;
+const SUBMIT_BASE_RETRY_DELAY_MS = 500;
+const SUBMIT_MAX_RETRY_DELAY_MS = 2500;
 const DEFAULT_FETCH_TIMEOUT_MS = 5000;
 const DEFAULT_FETCH_RETRY_DELAY_MS = 300;
 
@@ -95,6 +96,17 @@ function delay(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function computeRetryDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number
+) {
+  const safeAttempt = Math.max(attempt - 1, 0);
+  const exponential = Math.min(maxDelayMs, baseDelayMs * 2 ** safeAttempt);
+  const jitter = Math.floor(Math.random() * Math.max(200, exponential * 0.2));
+  return exponential + jitter;
 }
 
 export type QuizApiErrorType = "network" | "business" | "timeout";
@@ -284,7 +296,7 @@ async function submitGrabbedAnswerRaw(params: {
       throw new QuizApiError(
         "timeout",
         "提交等待超时",
-        "请检查网络连接后重试",
+        "提交结果暂未确认，请稍候查看题目状态，避免连续重复提交",
         error
       );
     }
@@ -478,7 +490,13 @@ export async function submitGrabbedAnswer(params: {
         if (quizError.type !== "network" || attempt >= SUBMIT_MAX_ATTEMPTS) {
           throw quizError;
         }
-        await delay(SUBMIT_RETRY_DELAY_MS);
+        await delay(
+          computeRetryDelayMs(
+            attempt,
+            SUBMIT_BASE_RETRY_DELAY_MS,
+            SUBMIT_MAX_RETRY_DELAY_MS
+          )
+        );
       }
     }
     throw new QuizApiError(

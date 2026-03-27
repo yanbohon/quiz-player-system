@@ -59,7 +59,6 @@ export interface FillDrawingBoardProps {
   onPathsChange: (paths: SmoothSerializedStroke[]) => void;
   initialPaths?: SmoothSerializedStroke[] | null;
   disabled?: boolean;
-  status?: "idle" | "waiting" | "uploading" | "success" | "error";
 }
 
 export interface FillDrawingBoardHandle {
@@ -126,7 +125,6 @@ export const FillDrawingBoard = forwardRef<
     onPathsChange,
     initialPaths,
     disabled = false,
-    status = "idle",
   },
   ref
 ) {
@@ -341,7 +339,7 @@ export const FillDrawingBoard = forwardRef<
                 ref={canvasRef}
                 className={styles.canvasSurface}
                 color={strokeColor}
-                size={16}
+                size={8}
                 mode={erasing ? "eraser" : "pen"}
                 onChange={handlePathsChange}
                 onHistoryChange={handleHistoryChange}
@@ -353,11 +351,6 @@ export const FillDrawingBoard = forwardRef<
               <div className={styles.topLeft}>
                 {questionTitle ? (
                   <p className={styles.boardQuestion}>{questionTitle}</p>
-                ) : null}
-                {status === "error" ? (
-                  <div className={styles.errorBadge}>
-                    上传失败，请检查网络后等待主持人再次提交
-                  </div>
                 ) : null}
               </div>
               <div className={styles.topRight}>
