@@ -12,11 +12,15 @@ import { showQuizApiErrorToast } from "@/lib/quizApiError";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
 import { CONTEST_MODES, DEFAULT_MODE, isQaVariantMode } from "./modes";
 import {
+  applyHpPenalty as applyHpPenaltyState,
+  createPenaltyGuardKey,
+  shouldClearRecoveredPenalty,
+} from "./hpPenalty";
+import {
   ContestModeId,
   ContestModeMeta,
   CustomOceanQuestion,
   MatchingOption,
-  HpPenaltyRecord,
   QuizQuestion,
   QuizSubmissionResult,
   QuizRuntime,
@@ -577,9 +581,22 @@ function isOceanQuestion(
   return Boolean(question && "questionKey" in question && !("id" in question));
 }
 
+function resolvePenaltyQuestionId(question: QuizQuestion | undefined) {
+  if (!question) return undefined;
+  if (isStandardQuestion(question)) {
+    return question.id;
+  }
+  if (isOceanQuestion(question)) {
+    return question.questionKey;
+  }
+  return undefined;
+}
+
 export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const router = useRouter();
   const meta = useMemo(() => resolveMode(modeId), [modeId]);
+  const shouldEnforceHpElimination =
+    meta.features.hasHp;
 
   const {
     user,
@@ -626,6 +643,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const [state, setState] = useState<QuizRuntimeState>(() =>
     createInitialState(meta)
   );
+  const stateRef = useRef<QuizRuntimeState>(createInitialState(meta));
 
   const wrongCountRef = useRef(0);
   const globalTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -636,9 +654,16 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const questionListRef = useRef<QuizQuestion[]>([]);
   const questionIndexRef = useRef<number>(state.questionIndex);
   const currentQuestionRef = useRef<QuizQuestion | undefined>(undefined);
+  const questionActivationRef = useRef(0);
+  const questionActivationSignatureRef = useRef<string | null>(null);
+  const questionPenaltyGuardKeyRef = useRef<string | undefined>(undefined);
   const localFetchInFlightRef = useRef(false);
   const pullFetchInFlightRef = useRef(false);
   const emptyPoolHandledRef = useRef(false);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const resetTimers = useCallback(() => {
     if (globalTimerRef.current) {
@@ -793,12 +818,33 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       const remainingHp = hasHp
         ? state.hp ?? meta.features.initialHp ?? 0
         : undefined;
-      const isEliminated = hasHp ? (remainingHp ?? 0) <= 0 : false;
+      const isEliminated = shouldEnforceHpElimination
+        ? (remainingHp ?? 0) <= 0
+        : false;
       const gatedQuestion = shouldHold ? undefined : nextQuestion;
       const effectiveQuestion = isEliminated ? undefined : gatedQuestion;
       const effectiveIndex = shouldHold ? -1 : index;
 
       questionIndexRef.current = effectiveIndex;
+      const effectiveQuestionId = resolvePenaltyQuestionId(effectiveQuestion);
+      const nextActivationSignature =
+        effectiveQuestion && effectiveQuestionId
+          ? `${effectiveQuestionId}:${effectiveIndex}`
+          : null;
+
+      if (!nextActivationSignature) {
+        questionActivationSignatureRef.current = null;
+        questionPenaltyGuardKeyRef.current = undefined;
+      } else {
+        if (questionActivationSignatureRef.current !== nextActivationSignature) {
+          questionActivationRef.current += 1;
+          questionActivationSignatureRef.current = nextActivationSignature;
+        }
+        questionPenaltyGuardKeyRef.current = createPenaltyGuardKey(
+          effectiveQuestionId,
+          questionActivationRef.current
+        );
+      }
 
       setState((prev) => ({
         ...prev,
@@ -844,6 +890,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       meta.id,
       meta.questionFlow,
       questionGateOpened,
+      shouldEnforceHpElimination,
       state.hp,
     ]
   );
@@ -855,6 +902,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     questionListRef.current = [];
     questionIndexRef.current = meta.questionFlow === "push" ? -1 : 0;
     currentQuestionRef.current = undefined;
+    questionActivationRef.current = 0;
+    questionActivationSignatureRef.current = null;
+    questionPenaltyGuardKeyRef.current = undefined;
     setState(createInitialState(meta));
   }, [meta, resetTimers]);
 
@@ -1110,6 +1160,87 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     return sortedExpected.every((item, idx) => item === sortedValue[idx]);
   }, []);
 
+  const buildPenaltyGuardKey = useCallback(
+    (questionId?: string) =>
+      createPenaltyGuardKey(questionId, questionActivationRef.current),
+    []
+  );
+
+  const applyHpPenalty = useCallback(
+    (source: "answer" | "judgement") => {
+      if (!meta.features.hasHp) {
+        return undefined;
+      }
+
+      const latestQuestion = currentQuestionRef.current;
+      const questionId = resolvePenaltyQuestionId(latestQuestion);
+      const guardKey = questionPenaltyGuardKeyRef.current ?? buildPenaltyGuardKey(questionId);
+      const currentHp = Math.trunc(
+        stateRef.current.hp ?? meta.features.initialHp ?? 0
+      );
+      const result = applyHpPenaltyState({
+        currentHp,
+        deduction: Math.max(meta.features.hpLossPerWrong ?? 1, 0),
+        latestPenalty: stateRef.current.lastHpPenalty,
+        questionId,
+        guardKey,
+        source,
+        enforceElimination: shouldEnforceHpElimination,
+        modeId: meta.id,
+      });
+
+      if (result.reused && result.penaltyRecord) {
+        stateRef.current = {
+          ...stateRef.current,
+          hp: result.nextHp,
+          answeringEnabled:
+            result.shouldDisableAnswering
+              ? false
+              : stateRef.current.answeringEnabled,
+          lastHpPenalty: result.penaltyRecord,
+        };
+        setState((prev) => ({
+          ...prev,
+          hp: result.nextHp,
+          answeringEnabled:
+            result.shouldDisableAnswering
+              ? false
+              : prev.answeringEnabled,
+          lastHpPenalty: result.penaltyRecord,
+        }));
+        return result.penaltyRecord;
+      }
+
+      stateRef.current = {
+        ...stateRef.current,
+        hp: result.nextHp,
+        answeringEnabled: result.shouldDisableAnswering
+          ? false
+          : stateRef.current.answeringEnabled,
+        oceanEndReason: result.oceanEndReason ?? stateRef.current.oceanEndReason,
+        lastHpPenalty: result.penaltyRecord ?? stateRef.current.lastHpPenalty,
+      };
+
+      setState((prev) => ({
+        ...prev,
+        hp: result.nextHp,
+        answeringEnabled: result.shouldDisableAnswering ? false : prev.answeringEnabled,
+        oceanEndReason: result.oceanEndReason ?? prev.oceanEndReason,
+        lastHpPenalty: result.penaltyRecord ?? prev.lastHpPenalty,
+      }));
+
+      return result.penaltyRecord;
+    },
+    [
+      buildPenaltyGuardKey,
+      meta.features.hasHp,
+      meta.features.hpLossPerWrong,
+      meta.features.initialHp,
+      meta.id,
+      shouldEnforceHpElimination,
+    ]
+  );
+
   const submitAnswer = useCallback(
     async (
       value: string | string[],
@@ -1179,43 +1310,14 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       if (meta.features.hasHp) {
         if (isCorrect === false) {
           wrongCountRef.current += 1;
-          const deduction = Math.max(meta.features.hpLossPerWrong ?? 1, 0);
-          const currentHp =
-            hpBeforeAnswer ?? state.hp ?? meta.features.initialHp ?? 0;
-          const nextHp = Math.max(currentHp - deduction, 0);
-          hpAfterAnswer = nextHp;
-          const penaltyQuestionId = isStandardQuestion(currentQuestion)
-            ? currentQuestion.id
-            : isOceanQuestion(currentQuestion)
-            ? currentQuestion.questionKey
-            : undefined;
-          setState((prev) => {
-            const baseHp = Math.trunc(prev.hp ?? meta.features.initialHp ?? 0);
-            const computedNext = Math.max(baseHp - deduction, 0);
-            const amount = Math.max(baseHp - computedNext, 0);
-            const penaltyRecord: HpPenaltyRecord | undefined =
-              amount > 0
-                ? {
-                    amount,
-                    hpBefore: baseHp,
-                    hpAfter: computedNext,
-                    timestamp: Date.now(),
-                    questionId: penaltyQuestionId,
-                    source: "answer",
-                  }
-                : prev.lastHpPenalty;
-            return {
-              ...prev,
-              hp: computedNext,
-              answeringEnabled: computedNext > 0 ? prev.answeringEnabled : false,
-              oceanEndReason:
-                meta.id === "ocean-adventure" && computedNext <= 0
-                  ? prev.oceanEndReason ?? "hp"
-                  : prev.oceanEndReason,
-              lastHpPenalty: penaltyRecord,
-            };
-          });
-          if (nextHp <= 0) {
+          const penaltyRecord = applyHpPenalty("answer");
+          hpAfterAnswer =
+            penaltyRecord?.hpAfter ??
+            hpBeforeAnswer ??
+            state.hp ??
+            meta.features.initialHp ??
+            0;
+          if (shouldEnforceHpElimination && hpAfterAnswer <= 0) {
             stopAll();
           }
         } else {
@@ -1297,13 +1399,14 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     [
       evaluateOceanQuestion,
       evaluateStandardQuestion,
+      applyHpPenalty,
       meta.features.hasHp,
-      meta.features.hpLossPerWrong,
       meta.features.initialHp,
       meta.id,
       resolveDuration,
       setAnswer,
       setCurrentQuestionIndex,
+      shouldEnforceHpElimination,
       state.hp,
       stopAll,
       userId,
@@ -1311,7 +1414,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   );
 
   const requestNextQuestion = useCallback(async () => {
-    if (meta.features.hasHp) {
+    if (shouldEnforceHpElimination) {
       const remainingHp =
         state.hp ?? meta.features.initialHp ?? 0;
       if (remainingHp <= 0) {
@@ -1332,11 +1435,11 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
   }, [
     fetchNextGrabQuestion,
-    meta.features.hasHp,
     meta.features.initialHp,
     meta.id,
     meta.questionFlow,
     setCurrentQuestionIndex,
+    shouldEnforceHpElimination,
     state.hp,
   ]);
 
@@ -1353,36 +1456,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         });
         return;
       }
-      const latestQuestion = currentQuestionRef.current;
-      const deduction = Math.max(meta.features.hpLossPerWrong ?? 1, 0);
-      setState((prev) => {
-        const baseHp = Math.trunc(prev.hp ?? meta.features.initialHp ?? 0);
-        const nextHp = Math.max(baseHp - deduction, 0);
-        const amount = Math.max(baseHp - nextHp, 0);
-        const penaltyRecord: HpPenaltyRecord | undefined =
-          amount > 0
-            ? {
-                amount,
-                hpBefore: baseHp,
-                hpAfter: nextHp,
-                timestamp: Date.now(),
-                questionId: isStandardQuestion(latestQuestion)
-                  ? latestQuestion.id
-                  : isOceanQuestion(latestQuestion)
-                  ? latestQuestion.questionKey
-                  : undefined,
-                source: "judgement",
-              }
-            : prev.lastHpPenalty;
-        return {
-          ...prev,
-          hp: nextHp,
-          answeringEnabled: nextHp > 0 && prev.answeringEnabled,
-          lastHpPenalty: penaltyRecord,
-        };
-      });
+      applyHpPenalty("judgement");
     },
-    [meta.features.hasHp, meta.features.hpLossPerWrong, meta.features.initialHp]
+    [applyHpPenalty, meta.features.hasHp]
   );
 
   const recoverHp = useCallback(
@@ -1391,25 +1467,42 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       const maxHp = Math.max(0, Math.trunc(meta.features.initialHp ?? 0));
       const normalizedTarget = Math.trunc(targetHp);
       const clamped = Math.max(0, Math.min(normalizedTarget, maxHp));
+      const currentHp = Math.trunc(stateRef.current.hp ?? maxHp);
+      const shouldClearPenalty = shouldClearRecoveredPenalty({
+        currentHp,
+        targetHp: clamped,
+        latestPenalty: stateRef.current.lastHpPenalty,
+      });
+      stateRef.current = {
+        ...stateRef.current,
+        hp: clamped,
+        answeringEnabled: shouldEnforceHpElimination
+          ? clamped > 0
+          : stateRef.current.answeringEnabled,
+        lastHpPenalty: shouldClearPenalty
+          ? undefined
+          : stateRef.current.lastHpPenalty,
+      };
       setState((prev) => {
-        const currentHp = Math.trunc(prev.hp ?? maxHp);
-        if (currentHp === clamped && prev.answeringEnabled) {
+        const previousHp = Math.trunc(prev.hp ?? maxHp);
+        if (previousHp === clamped && prev.answeringEnabled) {
           return prev;
         }
-        const penaltyAfter = prev.lastHpPenalty?.hpAfter;
-        const shouldClearPenalty =
-          clamped > currentHp &&
-          typeof penaltyAfter === "number" &&
-          Math.trunc(penaltyAfter) === currentHp;
         return {
           ...prev,
           hp: clamped,
-          answeringEnabled: clamped > 0,
+          answeringEnabled: shouldEnforceHpElimination
+            ? clamped > 0
+            : prev.answeringEnabled,
           lastHpPenalty: shouldClearPenalty ? undefined : prev.lastHpPenalty,
         };
       });
     },
-    [meta.features.hasHp, meta.features.initialHp]
+    [
+      meta.features.hasHp,
+      meta.features.initialHp,
+      shouldEnforceHpElimination,
+    ]
   );
 
   const delegateAnswerTo = useCallback(

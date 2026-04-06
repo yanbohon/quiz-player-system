@@ -101,6 +101,7 @@ export interface HpPenaltyRecord {
   amount: number;
   timestamp: number;
   questionId?: string;
+  guardKey?: string;
   source: "answer" | "judgement";
 }
 

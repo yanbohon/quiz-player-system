@@ -141,6 +141,34 @@ function computeRetryDelayMs(
   return exponential + jitter;
 }
 
+function resolveLastStandHpFromStatus(params: {
+  rawStatus: unknown;
+  initialHp: number;
+  isGroupedLastStand: boolean;
+  stageName?: string | null;
+}) {
+  const initialHp = Math.max(0, Math.trunc(params.initialHp));
+  if (params.isGroupedLastStand) {
+    const indicator = resolveLastStandGroupStatusIndicator(params.stageName);
+    if (!indicator) return undefined;
+    const normalized = String(params.rawStatus ?? "").trim();
+    if (!normalized) return undefined;
+    if (normalized === "0") return 0;
+    return normalized === indicator ? initialHp : undefined;
+  }
+
+  if (params.rawStatus === undefined || params.rawStatus === null) {
+    return undefined;
+  }
+
+  const parsed = Number(String(params.rawStatus).trim());
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.min(Math.trunc(parsed), initialHp));
+}
+
 function dedupePersistenceJobs(jobs: PersistenceJob[]): PersistenceJob[] {
   const seen = new Set<string>();
   return jobs.filter((job) => {
@@ -1623,6 +1651,8 @@ function QuizPageContent() {
   const { state, controls, meta } = useQuizRuntime(mode);
   const isQaMode = isQaVariantMode(meta.id);
   const isLastStandMode = meta.id === "last-stand" || meta.id === "last-stand-group";
+  const shouldEnforceLastStandElimination = true;
+  const shouldSyncLastStandStatus = true;
   const isGroupedLastStand = meta.id === "last-stand-group";
   const isUltimatePkMode = meta.id === "ultimate-pk";
   const delegateAnswerToControl = controls.delegateAnswerTo;
@@ -2143,67 +2173,38 @@ function QuizPageContent() {
   }, [meta.id]);
 
   useEffect(() => {
+    if (!shouldSyncLastStandStatus) return;
     if (!isLastStandMode) return;
+    const recoverControl = controls.recoverHp;
+    if (!recoverControl) return;
     if (!currentStage || !scoreRecord) return;
-    const scoreSheetId = currentStage.scoreSheetId;
     const recordId = scoreRecord.recordId;
-    if (!scoreSheetId || !recordId) return;
+    if (!recordId) return;
 
     const statusFieldKey = resolveStatusFieldKey(scoreRecord.fields);
     if (!statusFieldKey) return;
 
-    let statusValue: string | undefined;
-    if (isGroupedLastStand) {
-      statusValue = resolveLastStandGroupStatusIndicator(currentStage.name);
-    } else {
-      const initialHp = meta.features.initialHp ?? 0;
-      if (!Number.isFinite(initialHp) || initialHp <= 0) return;
-      statusValue = String(Math.max(0, Math.trunc(initialHp)));
-    }
+    const syncedHp = resolveLastStandHpFromStatus({
+      rawStatus: scoreRecord.fields?.[statusFieldKey],
+      initialHp: meta.features.initialHp ?? 0,
+      isGroupedLastStand,
+      stageName: currentStage.name,
+    });
+    if (syncedHp === undefined) return;
 
-    if (!statusValue) return;
-
-    const cacheKey = `${recordId}:${statusValue}:${isGroupedLastStand ? "group" : "classic"}`;
+    const cacheKey = `${recordId}:${statusFieldKey}:${syncedHp}:${isGroupedLastStand ? "group" : "classic"}`;
     if (statusInitRef.current === cacheKey) return;
 
-    const currentStatus = scoreRecord.fields?.[statusFieldKey];
-    if (
-      currentStatus !== undefined &&
-      currentStatus !== null &&
-      String(currentStatus) === statusValue
-    ) {
-      statusInitRef.current = cacheKey;
-      return;
-    }
-
-    let cancelled = false;
-    updateScoreStatus({
-      datasheetId: scoreSheetId,
-      recordId,
-      fieldKey: statusFieldKey,
-      status: statusValue,
-    })
-      .then(() => {
-        if (!cancelled) {
-          statusInitRef.current = cacheKey;
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.error("初始化一站到底状态失败", error);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    recoverControl(syncedHp);
+    statusInitRef.current = cacheKey;
   }, [
+    controls.recoverHp,
     currentStage,
     isGroupedLastStand,
     isLastStandMode,
     meta.features.initialHp,
     scoreRecord,
-    updateScoreStatus,
+    shouldSyncLastStandStatus,
   ]);
 
   const question = state.question;
@@ -3038,7 +3039,10 @@ function QuizPageContent() {
         ? !isOceanFinished
         : false;
 
-  const isEliminated = isLastStandMode && (hpDisplay?.current ?? 0) <= 0;
+  const isEliminated =
+    shouldEnforceLastStandElimination &&
+    isLastStandMode &&
+    (state.hp ?? meta.features.initialHp ?? 0) <= 0;
 
   const oceanRemainingDisplay =
     meta.id === "ocean-adventure"
@@ -3374,6 +3378,7 @@ function QuizPageContent() {
         }
         pendingManualTimestamp = now;
       }
+      if (activeSubmissionIdRef.current) return;
       if (isSubmitting) return;
 
       const currentQuestion = question;
@@ -3602,11 +3607,15 @@ function QuizPageContent() {
             }
 
             if (scoreSheetId && scoreRecordId && scoreFieldKey) {
-              const statusFieldKey = isLastStandMode
+              const statusFieldKey = isLastStandMode && shouldSyncLastStandStatus
                 ? resolveStatusFieldKey(scoreRecord?.fields)
                 : undefined;
               let statusValue: string | undefined;
-              if (isLastStandMode && typeof hpAfterAnswer === "number") {
+              if (
+                isLastStandMode &&
+                shouldSyncLastStandStatus &&
+                typeof hpAfterAnswer === "number"
+              ) {
                 if (!isGroupedLastStand) {
                   statusValue = String(Math.max(0, Math.trunc(hpAfterAnswer)));
                 } else {
@@ -3757,6 +3766,7 @@ function QuizPageContent() {
       isSubmitting,
       isLastStandMode,
       isGroupedLastStand,
+      shouldSyncLastStandStatus,
       enqueuePersistenceJob,
       enqueueSubmission,
     ]
@@ -3764,6 +3774,7 @@ function QuizPageContent() {
 
   const handleRetractCommand = useCallback(async () => {
     if (retractHandlingRef.current) return;
+    if (!shouldSyncLastStandStatus) return;
     if (!isLastStandMode) return;
     const recoverControl = controls.recoverHp;
     if (!recoverControl) return;
@@ -3853,6 +3864,7 @@ function QuizPageContent() {
     scoreRecord?.recordId,
     state.lastHpPenalty,
     state.hp,
+    shouldSyncLastStandStatus,
     updateScoreStatus,
   ]);
 
@@ -4266,7 +4278,7 @@ function QuizPageContent() {
       <div className={styles.commandSubmissionBadge}>
         <EliminatedIcon />
       </div>
-      <p className={styles.commandSubmissionTitle}>您已淘汰</p>
+      <p className={`${styles.commandSubmissionTitle} ${styles.eliminationTitle}`}>您已淘汰</p>
       <p className={styles.commandSubmissionSubtitle}>血量已耗尽，无法继续作答。</p>
     </div>
   );

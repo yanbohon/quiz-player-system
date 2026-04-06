@@ -8,6 +8,17 @@ interface User {
   team?: string;
 }
 
+export interface HpPenaltyGuardRecord {
+  eventId: string;
+  stageId: string;
+  questionId: string;
+  userId: string;
+  hpBefore: number;
+  hpAfter: number;
+  processedAt: number;
+  source: "answer" | "judgement";
+}
+
 export interface AnswerRecord {
   value: string | string[];
   submittedAt: number;
@@ -17,6 +28,8 @@ export interface AnswerRecord {
 
 type AnswerInput = string | string[] | Omit<AnswerRecord, "submittedAt">;
 
+const HP_PENALTY_GUARD_LIMIT = 200;
+
 interface AppState {
   // 用户状态
   user: User | null;
@@ -25,6 +38,7 @@ interface AppState {
   // 答题状态
   currentQuestionId: string | null;
   answers: Record<string, AnswerRecord>;
+  hpPenaltyGuards: Record<string, HpPenaltyGuardRecord>;
   
   // 连接状态
   mqttConnected: boolean;
@@ -34,6 +48,8 @@ interface AppState {
   setCurrentQuestion: (questionId: string | null) => void;
   setAnswer: (questionId: string, answer: AnswerInput) => void;
   clearAnswers: () => void;
+  markHpPenaltyGuard: (key: string, record: HpPenaltyGuardRecord) => void;
+  clearHpPenaltyGuard: (key: string) => void;
   setMqttConnected: (connected: boolean) => void;
   logout: () => void;
 }
@@ -47,13 +63,20 @@ export const useAppStore = create<AppState>()(
         isAuthenticated: false,
         currentQuestionId: null,
         answers: {},
+        hpPenaltyGuards: {},
         mqttConnected: false,
 
         // Actions
         setUser: (user) =>
           set((state) => {
+            const previousUserId = state.user?.id;
             state.user = user;
             state.isAuthenticated = !!user;
+            if (previousUserId && previousUserId !== user?.id) {
+              state.currentQuestionId = null;
+              state.answers = {};
+              state.hpPenaltyGuards = {};
+            }
           }),
 
         setCurrentQuestion: (questionId) =>
@@ -83,6 +106,29 @@ export const useAppStore = create<AppState>()(
             state.answers = {};
           }),
 
+        markHpPenaltyGuard: (key, record) =>
+          set((state) => {
+            state.hpPenaltyGuards[key] = record;
+            const entries = Object.entries(state.hpPenaltyGuards);
+            if (entries.length <= HP_PENALTY_GUARD_LIMIT) {
+              return;
+            }
+            entries
+              .sort(
+                (left, right) =>
+                  left[1].processedAt - right[1].processedAt
+              )
+              .slice(0, entries.length - HP_PENALTY_GUARD_LIMIT)
+              .forEach(([staleKey]) => {
+                delete state.hpPenaltyGuards[staleKey];
+              });
+          }),
+
+        clearHpPenaltyGuard: (key) =>
+          set((state) => {
+            delete state.hpPenaltyGuards[key];
+          }),
+
         setMqttConnected: (connected) =>
           set((state) => {
             state.mqttConnected = connected;
@@ -94,6 +140,7 @@ export const useAppStore = create<AppState>()(
             state.isAuthenticated = false;
             state.currentQuestionId = null;
             state.answers = {};
+            state.hpPenaltyGuards = {};
           }),
       })),
       {
@@ -102,6 +149,7 @@ export const useAppStore = create<AppState>()(
           user: state.user,
           isAuthenticated: state.isAuthenticated,
           answers: state.answers,
+          hpPenaltyGuards: state.hpPenaltyGuards,
         }),
       }
     )

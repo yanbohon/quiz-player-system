@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Divider, Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -10,9 +10,6 @@ import { Toast } from "@/lib/arco";
 import { mqttService } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
-import { CONTEST_MODES } from "@/features/quiz/modes";
-import { resolveStatusFieldKey, resolveLastStandGroupStatusIndicator } from "@/features/quiz/status";
-import { resolveModeForStage } from "@/features/quiz/useControlCommands";
 import { FUSION_API_CONFIG, MQTT_TOPICS } from "@/config/control";
 import LogoutIcon from "@/components/icons/logout.svg";
 import IconPicture from "@arco-design/mobile-react/esm/icon/IconPicture";
@@ -23,7 +20,7 @@ import styles from "./page.module.css";
 
 import type { FusionEventSummary } from "@/lib/fusionClient";
 
-const WAITING_PAGE_VERSION = "V2026.03.27.1";
+const WAITING_PAGE_VERSION = "V2026.04.02.2";
 
 function resolvePosterUrl(event?: FusionEventSummary): string | undefined {
   if (!event) return undefined;
@@ -164,9 +161,6 @@ export default function WaitingPage() {
   const {
     selectedEvent,
     teamProfile,
-    currentStage,
-    scoreRecord,
-    updateScoreStatus,
     waitingTicketView,
     rankStatus,
     rankEntries,
@@ -175,16 +169,12 @@ export default function WaitingPage() {
     useShallow((state) => ({
       selectedEvent: state.selectedEvent,
       teamProfile: state.teamProfile,
-      currentStage: state.currentStage,
-      scoreRecord: state.scoreRecord,
-      updateScoreStatus: state.updateScoreStatus,
       waitingTicketView: state.waitingTicketView,
       rankStatus: state.rankStatus,
       rankEntries: state.rankEntries,
       rankError: state.rankError,
     }))
   );
-  const statusResetRef = useRef<string | null>(null);
   const [badgeLoadError, setBadgeLoadError] = useState(false);
 
   useEffect(() => {
@@ -194,67 +184,6 @@ export default function WaitingPage() {
       router.replace("/login");
     }
   }, [isAuthenticated, router, storeHydrated]);
-
-  useEffect(() => {
-    if (!currentStage || !scoreRecord) return;
-
-    const mode = resolveModeForStage(currentStage);
-    if (mode !== "last-stand" && mode !== "last-stand-group") return;
-
-    const scoreSheetId = currentStage.scoreSheetId;
-    const recordId = scoreRecord.recordId;
-    if (!scoreSheetId || !recordId) return;
-
-    const statusFieldKey = resolveStatusFieldKey(scoreRecord.fields);
-    if (!statusFieldKey) return;
-
-    let statusValue: string | undefined;
-    if (mode === "last-stand-group") {
-      statusValue = resolveLastStandGroupStatusIndicator(currentStage.name);
-    } else {
-      const initialHp = CONTEST_MODES["last-stand"].features.initialHp ?? 0;
-      if (!Number.isFinite(initialHp) || initialHp <= 0) return;
-      statusValue = String(Math.max(0, Math.trunc(initialHp)));
-    }
-
-    if (!statusValue) return;
-
-    const cacheKey = `${recordId}:${mode}:${statusValue}`;
-    if (statusResetRef.current === cacheKey) return;
-
-    const currentStatus = scoreRecord.fields[statusFieldKey];
-    if (
-      currentStatus !== undefined &&
-      currentStatus !== null &&
-      String(currentStatus) === statusValue
-    ) {
-      statusResetRef.current = cacheKey;
-      return;
-    }
-
-    let cancelled = false;
-
-    updateScoreStatus({
-      datasheetId: scoreSheetId,
-      recordId,
-      fieldKey: statusFieldKey,
-      status: statusValue,
-    })
-      .then(() => {
-        if (!cancelled) {
-          statusResetRef.current = cacheKey;
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.error("重置血量状态失败", error);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentStage, scoreRecord, updateScoreStatus]);
 
   const teamDisplayNameRaw =
     typeof teamProfile?.displayName === "string"
