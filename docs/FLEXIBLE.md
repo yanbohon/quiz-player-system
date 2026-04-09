@@ -2,7 +2,7 @@
 
 本项目使用 Arco Design Mobile 官方提供的 `flexible.js` 进行 rem 自适应适配。
 
-> 📚 **相关文档**：查看 [完整示例和转换指南](./FLEXIBLE_EXAMPLE.md) 了解如何将 px 转换为 rem
+> 📚 **相关文档**：历史转换示例见 [archive/FLEXIBLE_EXAMPLE.md](./archive/FLEXIBLE_EXAMPLE.md)
 
 ## 配置说明
 
@@ -137,4 +137,3 @@ console.log(window.innerWidth);
 - 支持 Android Chrome
 - 自动响应屏幕旋转（orientationchange）
 - 自动响应窗口大小变化（resize）
-

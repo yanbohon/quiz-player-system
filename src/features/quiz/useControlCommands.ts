@@ -14,6 +14,7 @@ import { mqttService } from "@/lib/mqtt/client";
 import type { MqttConfig } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { RANK_STAGE_MISSING_ERROR, useQuizStore } from "@/store/quizStore";
+import { getOceanGroupLabel } from "@/features/quiz/oceanGroup";
 
 const MQTT_KEEPALIVE_SECONDS = 45;
 const MQTT_RECONNECT_PERIOD_MS = 5_000;
@@ -85,6 +86,11 @@ const MODE_ALIAS_MAP: Record<string, ContestModeId> = {
   "终极挑战": "ultimate-challenge",
   "同分加题": "ultimate-challenge",
   "同分加題": "ultimate-challenge",
+  "buzzer-sprint": "buzzer-sprint",
+  buzzersprint: "buzzer-sprint",
+  "抢答冲刺": "buzzer-sprint",
+  "抢答冲刺赛": "buzzer-sprint",
+  "抢答冲刺环节": "buzzer-sprint",
   "ultimate-pk": "ultimate-pk",
   "ultimatepk": "ultimate-pk",
   "终极pk": "ultimate-pk",
@@ -196,6 +202,9 @@ export function resolveModeForStage(stage: QuizStage): ContestModeId | undefined
     if (lower.includes("终极pk") || compact.includes("终极pk")) {
       return "ultimate-pk";
     }
+    if (lower.includes("抢答冲刺") || compact.includes("抢答冲刺")) {
+      return "buzzer-sprint";
+    }
     if (lower.includes("题海")) {
       return "ocean-adventure";
     }
@@ -254,7 +263,23 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentModeParam = useMemo(() => searchParams.get("mode") ?? undefined, [searchParams]);
-  const userId = useAppStore((state) => state.user?.id);
+  const {
+    userId,
+    oceanGroupId,
+    setOceanPlayMode,
+    setOceanGroupId,
+    setOceanGroupLocked,
+    clearSprintTeamSelection,
+  } = useAppStore(
+    useShallow((state) => ({
+      userId: state.user?.id,
+      oceanGroupId: state.oceanGroupId,
+      setOceanPlayMode: state.setOceanPlayMode,
+      setOceanGroupId: state.setOceanGroupId,
+      setOceanGroupLocked: state.setOceanGroupLocked,
+      clearSprintTeamSelection: state.clearSprintTeamSelection,
+    }))
+  );
 
   const {
     events,
@@ -264,6 +289,9 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
     grabNextQuestion,
     logCommand,
     currentStage,
+    oceanStageConfig,
+    oceanStageConfigStatus,
+    oceanStageConfigError,
     waitingForStageStart,
     setCurrentQuestionIndex,
     reset: resetQuizStore,
@@ -278,6 +306,9 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       grabNextQuestion: state.grabNextQuestion,
       logCommand: state.logCommand,
       currentStage: state.currentStage,
+      oceanStageConfig: state.oceanStageConfig,
+      oceanStageConfigStatus: state.oceanStageConfigStatus,
+      oceanStageConfigError: state.oceanStageConfigError,
       waitingForStageStart: state.waitingForStageStart,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
       reset: state.reset,
@@ -481,13 +512,25 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
           await activateStageById(stageId, userId);
           const stage = useQuizStore.getState().currentStage;
           const targetMode = resolveModeForStage(stage);
-          const targetPath = targetMode ? `/quiz?mode=${encodeURIComponent(targetMode)}` : "/quiz";
+          setOceanPlayMode(null);
+          setOceanGroupId(null);
+          setOceanGroupLocked(false);
+          let targetPath = targetMode ? `/quiz?mode=${encodeURIComponent(targetMode)}` : "/quiz";
+          let forceRoute = false;
+          if (targetMode === "buzzer-sprint") {
+            clearSprintTeamSelection();
+            const sprintEntry = String(Date.now());
+            targetPath = `${targetPath}&entry=${encodeURIComponent(sprintEntry)}`;
+            forceRoute = true;
+          } else {
+            clearSprintTeamSelection();
+          }
           const onQuizPage = pathname === "/quiz";
           const sameMode =
             onQuizPage &&
             ((targetMode && currentModeParam === targetMode) ||
               (!targetMode && !currentModeParam));
-          if (!sameMode) {
+          if (forceRoute || !sameMode) {
             router.push(targetPath);
           }
         } catch (err) {
@@ -503,8 +546,28 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
         waitingForStageStart &&
         userId
       ) {
+        if (oceanStageConfigStatus === "loading" || oceanStageConfigStatus === "idle") {
+          Toast.warn("题海环节配置加载中，请稍候");
+          return;
+        }
+        if (oceanStageConfigStatus === "error") {
+          Toast.error(oceanStageConfigError ?? "题海环节配置加载失败");
+          return;
+        }
+        const oceanMode = oceanStageConfig?.mode;
+        if (!oceanMode) {
+          Toast.error("题海环节配置缺失，无法开始");
+          return;
+        }
+        if (oceanMode === "group" && !oceanGroupId) {
+          Toast.warn("请先选择红队或蓝队");
+          return;
+        }
+        const activeGroupId =
+          oceanMode === "group" ? oceanGroupId ?? undefined : undefined;
         try {
-          await grabNextQuestion(userId);
+          setOceanGroupLocked(true);
+          await grabNextQuestion(userId, activeGroupId);
         } catch (err) {
           if (
             err instanceof ApiError &&
@@ -514,7 +577,11 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
             return;
           }
           console.error("题海遨游取题失败", err);
-          Toast.error("获取题目失败");
+          Toast.error(
+            err instanceof Error && err.message
+              ? err.message
+              : `获取${getOceanGroupLabel(activeGroupId) ?? ""}题目失败`
+          );
         }
         return;
       }
@@ -537,7 +604,15 @@ export function useControlCommands(enabled: boolean, clientId?: string) {
       pathname,
       router,
       currentModeParam,
+      oceanStageConfig,
+      oceanStageConfigError,
+      oceanStageConfigStatus,
+      oceanGroupId,
       resetQuizStore,
+      setOceanGroupId,
+      setOceanPlayMode,
+      setOceanGroupLocked,
+      clearSprintTeamSelection,
       userId,
       waitingForStageStart,
       fetchWaitingRankings,

@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+/playwright-report
+/test-results
+/playwright/.auth
 
 # next.js
 /.next/
@@ -47,4 +50,3 @@ next-env.d.ts
 *.swp
 *.swo
 *~
-

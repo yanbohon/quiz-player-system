@@ -1,332 +1,132 @@
-# API 文档
+# 接口与消息通道
 
-## API 基础信息
+本文档只描述当前代码实际使用的接入面，不再保留初始化阶段的示例认证接口。
 
-- 基础 URL: `NEXT_PUBLIC_API_BASE_URL` 环境变量配置（未设置时回退到 `NEXT_PUBLIC_API_URL` 或 `/api`）
-- 内容类型: `application/json`
-- 认证方式: Bearer Token（待实现）
+## 总览
 
-## 通用响应格式
+| 类型 | 作用 | 主要文件 |
+| --- | --- | --- |
+| MQTT | 主持人指令、抢答控制、结果广播、在线状态 | `src/config/control.ts`, `src/lib/mqtt/client.ts` |
+| Fusion API | 赛事、赛段、题表、分数表、队伍资料 | `src/config/control.ts`, `src/lib/fusionClient.ts` |
+| 题海 API | `ocean-adventure` 抢题与提交 | `src/config/api.ts`, `src/lib/fusionClient.ts` |
+| 通用 REST helper | 保留给额外接口接入，不是当前主链路 | `src/lib/api/` |
 
-### 成功响应
+## MQTT
 
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    // 具体数据
-  }
-}
-```
+### 环境变量
 
-### 错误响应
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `NEXT_PUBLIC_MQTT_ENABLED` | `true` | 设为 `false` 可完全禁用 MQTT |
+| `NEXT_PUBLIC_MQTT_URL` | `wss://ws.ohvfx.com:8084/mqtt` | Broker WebSocket 地址 |
+| `NEXT_PUBLIC_MQTT_USERNAME` | 内置默认值 | MQTT 用户名 |
+| `NEXT_PUBLIC_MQTT_PASSWORD` | 内置默认值 | MQTT 密码 |
+| `NEXT_PUBLIC_MQTT_TOPIC_COMMAND` | `cmd` | 主持人文本指令 |
+| `NEXT_PUBLIC_MQTT_TOPIC_CONTROL` | `quiz/control` | 抢答控制主题 |
+| `NEXT_PUBLIC_MQTT_TOPIC_RESULT` | `quiz/result` | 抢答结果主题 |
+| `NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN` | `quiz/buzz_in` | 选手抢答上报主题 |
+| `NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX` | `state` | 在线状态主题前缀 |
 
-```json
-{
-  "code": 400,
-  "message": "错误描述",
-  "data": null
-}
-```
+### 当前用法
 
-## API 端点
+- 等待页和答题页根据 MQTT 连接状态展示提示。
+- 主持人通过 `cmd` 发起刷新、回首页、切赛事、切题、开赛段等命令。
+- `ultimate-challenge` 和 `buzzer-sprint` 通过 `quiz/control`、`quiz/result`、`quiz/buzz_in` 完成抢答流程。
+- 在线状态使用 `state/<clientId>` 形式派生。
 
-### 1. 认证相关
+具体命令和值格式见 [MQTT_COMMANDS.md](./MQTT_COMMANDS.md)。
 
-#### 登录
+## Fusion API
 
-```http
-POST /auth/login
-```
+### 环境变量
 
-请求体：
-```json
-{
-  "username": "string",
-  "password": "string"
-}
-```
+| 变量 | 说明 |
+| --- | --- |
+| `NEXT_PUBLIC_FUSION_API_BASE` | Fusion 基础地址 |
+| `NEXT_PUBLIC_FUSION_API_TOKEN` | Bearer Token |
+| `NEXT_PUBLIC_FUSION_SPACE_ID` | 空间 ID |
+| `NEXT_PUBLIC_FUSION_EVENT_NODE_ID` | 赛事节点 ID |
 
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "token": "string",
-    "user": {
-      "id": "string",
-      "name": "string",
-      "team": "string"
-    }
-  }
-}
-```
+### 当前请求
 
-#### 登出
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/v1/spaces/{spaceId}/nodes/{eventNodeId}` | 拉取赛事列表 |
+| `GET` | `/v1/datasheets/{datasheetId}/records` | 拉取赛段、题表、队伍、分数记录 |
+| `PATCH` | `/v1/datasheets/{datasheetId}/records` | 回写答案、判定结果、分数字段 |
 
-```http
-POST /auth/logout
-```
+### 使用位置
 
-### 2. 题目相关
+- `useQuizStore.loadEvents`
+- `useQuizStore.selectEventByOrdinal`
+- `useQuizStore.activateStageById`
+- `useQuizStore.refreshTeamProfile`
+- `useQuizStore.refreshScoreRecord`
+- `useQuizStore.submitAnswerChoice`
+- `useQuizStore.submitJudgeResult`
+- `useQuizStore.updateScoreStatus`
 
-#### 获取题目列表
+具体字段约定见 [FUSION_SCHEMA.md](./FUSION_SCHEMA.md)。
 
-```http
-GET /questions
-```
+## 题海 API
 
-查询参数：
-- `page`: 页码（默认 1）
-- `pageSize`: 每页数量（默认 10）
-- `contestId`: 比赛 ID（可选）
+### 环境变量
 
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "id": "string",
-        "type": "single",
-        "title": "string",
-        "content": "string",
-        "options": [
-          {
-            "id": "string",
-            "label": "A",
-            "value": "string"
-          }
-        ],
-        "score": 10,
-        "timeLimit": 60
-      }
-    ],
-    "total": 100,
-    "page": 1,
-    "pageSize": 10
-  }
-}
-```
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `NEXT_PUBLIC_TIHAI_API_BASE` | `https://fn.ohvfx.com/quiz-pool/api` | 题海接口基础地址 |
 
-#### 获取题目详情
+### 当前请求
 
-```http
-GET /questions/:id
-```
+#### `POST /grab-with-details`
 
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "id": "string",
-    "type": "single",
-    "title": "string",
-    "content": "string",
-    "options": [...],
-    "score": 10,
-    "timeLimit": 60
-  }
-}
-```
-
-### 3. 答案相关
-
-#### 提交答案
-
-```http
-POST /answers
-```
+用途：题海模式抢下一题。
 
 请求体：
+
 ```json
 {
-  "questionId": "string",
-  "answer": "string" // 或 string[] 对于多选题
+  "userId": "1001",
+  "groupId": "teamA"
 }
 ```
 
-响应：
+说明：
+
+- `groupId` 可选。
+- 不传时走个人模式，传入时走分组 PK 计分。
+
+#### `POST /submit-answer`
+
+用途：提交题海答案。
+
+请求体：
+
 ```json
 {
-  "code": 0,
-  "message": "success",
-  "data": {
-    "submissionId": "string",
-    "score": 10,
-    "isCorrect": true
-  }
+  "userId": "1001",
+  "questionId": "q-001",
+  "answer": ["A"],
+  "groupId": "teamA"
 }
 ```
 
-#### 获取用户答题记录
+说明：
 
-```http
-GET /user/answers
-```
+- `answer` 支持字符串或字符串数组。
+- 前端会串行化提交、控制最小提交间隔，并在网络异常时重试。
 
-查询参数：
-- `contestId`: 比赛 ID（可选）
+## 通用 REST helper
 
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "answers": [
-      {
-        "questionId": "string",
-        "answer": "string",
-        "score": 10,
-        "submittedAt": "2025-10-07T12:00:00Z"
-      }
-    ]
-  }
-}
-```
+`src/lib/api/` 仍然保留 `apiFetch` 和题目归一化工具，但它不是当前赛事运行主路径。
 
-### 4. 用户相关
+当前只有以下情况建议继续使用：
 
-#### 获取用户信息
+- 新增非 Fusion 的普通 REST 接口
+- 需要通过统一 helper 读取题目 JSON 并归一化
 
-```http
-GET /user/profile
-```
+## 错误与超时策略
 
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "id": "string",
-    "name": "string",
-    "team": "string",
-    "avatar": "string"
-  }
-}
-```
-
-### 5. 比赛相关
-
-#### 获取比赛列表
-
-```http
-GET /contests
-```
-
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "id": "string",
-        "name": "string",
-        "description": "string",
-        "startTime": "2025-10-07T10:00:00Z",
-        "endTime": "2025-10-07T12:00:00Z",
-        "status": "active"
-      }
-    ]
-  }
-}
-```
-
-#### 获取比赛详情
-
-```http
-GET /contests/:id
-```
-
-## API 基础配置
-
-| 环境变量 | 默认值 | 说明 |
-|----------|---------|------|
-| `NEXT_PUBLIC_API_BASE_URL` | `/api` | 通用 REST 接口基础地址 |
-| `NEXT_PUBLIC_TIHAI_API_BASE` | `https://znbiakwnyaoe.sealosbja.site/api` | 题海抢题端点基础地址 |
-
-## MQTT 主题
-
-所有主题可通过 `.env.local` 配置，默认值如下：
-
-| 环境变量 | 默认值 | 说明 |
-|----------|---------|------|
-| `NEXT_PUBLIC_MQTT_TOPIC_COMMAND` | `cmd` | 主持人指令广播，例如 `race-3`、`5-start`、`start`、`q-5` |
-| `NEXT_PUBLIC_MQTT_TOPIC_CONTROL` | `quiz/control` | 终极挑战抢答控制消息 |
-| `NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX` | `state` | 选手在线状态前缀（最终主题为 `<prefix>/<clientId>`） |
-
-### 主持人指令 (`NEXT_PUBLIC_MQTT_TOPIC_COMMAND`)
-
-- 文本协议，常见命令：
-  - `race-<n>`：切换到第 `n` 个赛事（1-based）
-  - `<stageId>-start`：激活指定环节
-  - `start`：在题海遨游等环节触发取题
-  - `q-<n>`：切换到第 `n` 道题目（1-based）
-
-### 终极挑战控制 (`NEXT_PUBLIC_MQTT_TOPIC_CONTROL`)
-
-- `%start_buzzing%`：允许选手端触发抢答
-- 其他指令可按需扩展
-
-### 在线状态 (`<NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX>/<clientId>`)
-
-- 连接成功后发布 `online`（retain）
-- 浏览器关闭或退出前发布 `offline`（retain）
-
-## 错误码
-
-| 错误码 | 说明 |
-|-------|------|
-| 0 | 成功 |
-| 400 | 请求参数错误 |
-| 401 | 未认证 |
-| 403 | 无权限 |
-| 404 | 资源不存在 |
-| 500 | 服务器错误 |
-| 1001 | 用户名或密码错误 |
-| 1002 | Token 已过期 |
-| 2001 | 题目不存在 |
-| 2002 | 答案格式错误 |
-| 3001 | 比赛未开始 |
-| 3002 | 比赛已结束 |
-
-## 使用示例
-
-### 使用 React Query
-
-```typescript
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { api } from '@/lib/api/client';
-
-// 查询
-function useQuestions() {
-  return useQuery({
-    queryKey: ['questions'],
-    queryFn: () => api.get('/questions'),
-  });
-}
-
-// 变更
-function useSubmitAnswer() {
-  return useMutation({
-    mutationFn: (data) => api.post('/answers', data),
-  });
-}
-```
-
-## 注意事项
-
-1. 所有时间使用 ISO 8601 格式
-2. 分页从 1 开始
-3. 需要在请求头中携带认证 Token（待实现）
-4. MQTT 消息使用 JSON 格式
+- MQTT 连接失败不会阻止页面打开，只会禁用实时联动。
+- Fusion 请求默认 5 秒超时，可按调用方配置重试。
+- 题海提交带串行队列和重试逻辑，避免重复提交与连点风暴。

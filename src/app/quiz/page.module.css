@@ -93,6 +93,21 @@
   font-weight: 600;
 }
 
+.progressUserSolo {
+  background: rgba(15, 23, 42, 0.08);
+  color: #334155;
+}
+
+.progressUserRed {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.progressUserBlue {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
 .progressBar :global(.arco-progress-line-track) {
   background: #e2e8f0;
 }
@@ -179,6 +194,13 @@
   min-height: 320px;
 }
 
+.loadingTopSlot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
 .statusBadge {
   width: 120px;
   height: 120px;
@@ -246,6 +268,141 @@
   font-size: 14px;
   color: #64748b;
   max-width: 320px;
+}
+
+.oceanGroupCard {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: 0 16px 28px rgba(37, 99, 235, 0.08);
+}
+
+.oceanGroupHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.oceanGroupTitle {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.4;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.oceanGroupSubtitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.oceanGroupSelector {
+  width: 100%;
+  display: flex;
+  gap: 14px;
+}
+
+.oceanModeSelector {
+  width: 100%;
+  display: flex;
+  gap: 14px;
+}
+
+.oceanModeButton {
+  flex: 1;
+  min-height: 72px;
+  border: none;
+  border-radius: 18px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  opacity: 0.55;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.oceanModeButton:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.45);
+  outline-offset: 3px;
+}
+
+.oceanModeButton:disabled {
+  cursor: not-allowed;
+}
+
+.oceanModeButtonActive {
+  opacity: 1;
+  transform: translateY(-2px);
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.18);
+}
+
+.oceanModeButtonSolo {
+  background: linear-gradient(180deg, #f8fafc 0%, #cbd5e1 100%);
+  color: #0f172a;
+}
+
+.oceanModeButtonGroup {
+  background: linear-gradient(180deg, #dbeafe 0%, #60a5fa 100%);
+  color: #0f172a;
+}
+
+.oceanGroupButton {
+  flex: 1;
+  min-height: 72px;
+  border: none;
+  border-radius: 18px;
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  opacity: 0.45;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.oceanGroupButton:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.45);
+  outline-offset: 3px;
+}
+
+.oceanGroupButton:disabled {
+  cursor: not-allowed;
+}
+
+.oceanGroupButtonActive {
+  opacity: 1;
+  transform: translateY(-2px);
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.2);
+}
+
+.oceanGroupButtonRed {
+  background: linear-gradient(180deg, #fb7185 0%, #e11d48 100%);
+}
+
+.oceanGroupButtonBlue {
+  background: linear-gradient(180deg, #38bdf8 0%, #2563eb 100%);
+}
+
+.oceanGroupHint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+.oceanGroupDivider {
+  width: 100%;
+  height: 1px;
+  background: rgba(148, 163, 184, 0.28);
 }
 
 .questionHeader {
@@ -1090,10 +1247,9 @@
   color: #166534;
 }
 
-
 .boardSubmittedSubtitle {
   font-size: 13px;
-  color: #475569;
+  color: #15803d;
 }
 
 .categories {
@@ -1128,6 +1284,74 @@
   color: #64748b;
   line-height: 1.6;
   max-width: 320px;
+}
+
+.sprintTeamSelectionPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.sprintTeamDialogFooter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+}
+
+.sprintTeamDialogButton {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: 14px;
+  padding: 0 18px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  color: #ffffff;
+  transition: transform 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sprintTeamDialogButton:active {
+  transform: translateY(1px);
+}
+
+.sprintTeamDialogButtonRed {
+  background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+  box-shadow: 0 14px 28px rgba(220, 38, 38, 0.24);
+}
+
+.sprintTeamDialogButtonBlue {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24);
+}
+
+.sprintTeamActionButton {
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  border-radius: 999px;
+  min-height: 38px;
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease,
+    transform 0.2s ease, opacity 0.2s ease;
+}
+
+.sprintTeamActionButton:not(:disabled) {
+  cursor: pointer;
+}
+
+.sprintTeamActionButton:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.sprintTeamActionButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .ultimateWrapper {
@@ -1185,6 +1409,30 @@
   font-weight: 500;
 }
 
+.ultimateTeamBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.ultimateTeamBadgeRed {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+}
+
+.ultimateTeamBadgeBlue {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
 .ultimateBuzzer {
   width: min(500px, 80vw)!important;
   height: min(500px, 80vw)!important;
@@ -1195,6 +1443,23 @@
   font-weight: 700;
   font-size: 26px;
   box-shadow: 0 24px 48px rgba(37, 99, 235, 0.35);
+}
+
+.ultimateBuzzer:disabled {
+  background: radial-gradient(circle at 30% 30%, #e2e8f0, #94a3b8) !important;
+  box-shadow: 0 18px 34px rgba(100, 116, 139, 0.24) !important;
+  color: #f8fafc !important;
+  opacity: 1 !important;
+}
+
+.ultimateBuzzerRed {
+  background: radial-gradient(circle at 30% 30%, #fb7185, #ef4444) !important;
+  box-shadow: 0 24px 48px rgba(239, 68, 68, 0.35) !important;
+}
+
+.ultimateBuzzerBlue {
+  background: radial-gradient(circle at 30% 30%, #60a5fa, #2563eb) !important;
+  box-shadow: 0 24px 48px rgba(37, 99, 235, 0.35) !important;
 }
 
 .ultimateBuzzerText {
@@ -1504,6 +1769,12 @@
   gap: 8px;
 }
 
+.syncQueueRowActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .syncQueueRowLabel {
   font-size: 13px;
   font-weight: 600;
@@ -1513,6 +1784,36 @@
 .syncQueueRowMeta {
   font-size: 11px;
   color: #64748b;
+}
+
+.syncQueueDeleteButton {
+  border: none;
+  background: transparent;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+}
+
+.syncQueueRowDetails {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.syncQueueRowKey {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.syncQueueRowValue {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  text-align: right;
+  word-break: break-word;
 }
 
 .syncQueueRowError {
@@ -1575,16 +1876,33 @@
   color: #ffffff;
 }
 
-.eliminationTitle {
-  color: #000000;
-}
-
 .commandSubmissionSubtitle {
   margin: 0;
   font-size: 20px;
   color: #ffffff;
   line-height: 1.6;
   max-width: 280px;
+}
+
+.submissionFeedbackTitle {
+  margin: 0;
+  font-size: 50px;
+  font-weight: 700;
+}
+
+.submissionFeedbackSubtitle {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.6;
+  max-width: 280px;
+}
+
+.submissionFeedbackToneSuccess {
+  color: #15803d;
+}
+
+.submissionFeedbackToneNeutral {
+  color: #0f172a;
 }
 
 .oceanResultWrapper {
@@ -1742,6 +2060,29 @@
     font-size: 32px;
   }
 
+  .oceanGroupCard {
+    padding: 18px 14px;
+    border-radius: 18px;
+  }
+
+  .oceanGroupSelector {
+    gap: 10px;
+  }
+
+  .oceanModeSelector {
+    gap: 10px;
+  }
+
+  .oceanModeButton {
+    min-height: 60px;
+    font-size: 17px;
+  }
+
+  .oceanGroupButton {
+    min-height: 60px;
+    font-size: 20px;
+  }
+
   .ultimateBuzzer {
     width: min(220px, 60vw);
     height: min(220px, 60vw);
@@ -1749,6 +2090,12 @@
 
   .ultimateBuzzerText {
     font-size: 24px;
+  }
+
+  .ultimateTeamBadge {
+    min-height: 32px;
+    padding: 6px 14px;
+    font-size: 13px;
   }
 
   .ultimatePkCard {

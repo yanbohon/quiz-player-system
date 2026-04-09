@@ -193,7 +193,7 @@ docker run -p 3000:3000 xinsai-player:latest
 - [CloudBase 云托管文档](https://cloud.tencent.com/document/product/876/45154)
 - [Next.js 部署指南](https://nextjs.org/docs/deployment)
 - [项目 README](./README.md)
-- [开发文档](./docs/DEVELOPMENT.md)
+- [开发文档](../DEVELOPMENT.md)
 
 ---
 
@@ -206,4 +206,3 @@ docker run -p 3000:3000 xinsai-player:latest
 5. ⏳ 设置监控告警
 
 **需要帮助？** 查看 [CloudBase 控制台](https://console.cloud.tencent.com/tcb) 或联系技术支持。
-

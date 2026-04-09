@@ -229,7 +229,7 @@ tcb run:deploy --envId cloud1-8gzz6a4hc1833f5e \
 - **完整部署指南**: [CLOUDBASE_DEPLOYMENT.md](./CLOUDBASE_DEPLOYMENT.md)
 - **环境变量配置**: [cloudbase-env-config.json](./cloudbase-env-config.json)
 - **项目文档**: [README.md](./README.md)
-- **开发指南**: [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)
+- **开发指南**: [DEVELOPMENT.md](../DEVELOPMENT.md)
 
 ---
 
@@ -266,5 +266,4 @@ tcb run:deploy --envId cloud1-8gzz6a4hc1833f5e \
 - [CloudBase 文档](https://cloud.tencent.com/document/product/876)
 - [Next.js 文档](https://nextjs.org/docs)
 - 技术支持: 查看腾讯云工单系统
-
 

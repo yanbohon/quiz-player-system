@@ -169,6 +169,24 @@ export const CONTEST_MODES: Record<ContestModeMeta["id"], ContestModeMeta> = {
       localQuestionCache: false,
     },
   },
+  "buzzer-sprint": {
+    id: "buzzer-sprint",
+    name: "抢答冲刺",
+    description:
+      "全题型采用抢答链路的冲刺赛段，进入前需确认红蓝队身份。",
+    channel: "hybrid",
+    questionFlow: "push",
+    answerFlow: "external",
+    questionFormat: "standard",
+    features: {
+      hasHp: false,
+      requiresBuzzer: true,
+      allowsDelegation: true,
+      supportsTimer: true,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
   "ultimate-pk": {
     id: "ultimate-pk",
     name: "终极PK",
@@ -195,4 +213,13 @@ export const QA_VARIANT_MODE_IDS: ContestModeId[] = ["qa", "qa-20", "qa-30", "qa
 
 export function isQaVariantMode(id: ContestModeId): boolean {
   return QA_VARIANT_MODE_IDS.includes(id);
+}
+
+const ULTIMATE_BUZZ_MODE_IDS: ContestModeId[] = [
+  "ultimate-challenge",
+  "buzzer-sprint",
+];
+
+export function isUltimateBuzzMode(id: ContestModeId): boolean {
+  return ULTIMATE_BUZZ_MODE_IDS.includes(id);
 }

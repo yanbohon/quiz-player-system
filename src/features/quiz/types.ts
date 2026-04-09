@@ -10,6 +10,7 @@ export type ContestModeId =
   | "speed-run"
   | "ocean-adventure"
   | "ultimate-challenge"
+  | "buzzer-sprint"
   | "ultimate-pk";
 
 export interface ContestModeMeta {

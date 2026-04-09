@@ -8,7 +8,12 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:broker": "playwright test -c playwright.broker.config.ts",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@arco-design/mobile-react": "2.38.1",
@@ -24,13 +29,18 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.59.1",
     "@tanstack/eslint-plugin-query": "^5.62.14",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
     "@types/lodash": "4.17.20",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.19.0",
     "eslint-config-next": "15.5.4",
+    "jsdom": "26.1.0",
     "typescript": "^5.7.3",
     "vitest": "4.1.2"
   },

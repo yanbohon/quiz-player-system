@@ -20,7 +20,7 @@ import styles from "./page.module.css";
 
 import type { FusionEventSummary } from "@/lib/fusionClient";
 
-const WAITING_PAGE_VERSION = "V2026.04.02.2";
+const WAITING_PAGE_VERSION = "V2026.04.08.1";
 
 function resolvePosterUrl(event?: FusionEventSummary): string | undefined {
   if (!event) return undefined;

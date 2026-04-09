@@ -242,9 +242,9 @@ useEffect(() => {
 
 ### 文档
 
-- 📘 [FLEXIBLE.md](./docs/FLEXIBLE.md) - 配置说明
-- 📋 [FLEXIBLE_EXAMPLE.md](./docs/FLEXIBLE_EXAMPLE.md) - 示例指南
-- 🔄 [FLEXIBLE_MIGRATION.md](./docs/FLEXIBLE_MIGRATION.md) - 迁移指南
+- 📘 [FLEXIBLE.md](../FLEXIBLE.md) - 配置说明
+- 📋 [FLEXIBLE_EXAMPLE.md](./FLEXIBLE_EXAMPLE.md) - 示例指南
+- 🔄 [FLEXIBLE_MIGRATION.md](./FLEXIBLE_MIGRATION.md) - 迁移指南
 - 📖 [README.md](./README.md) - 项目文档
 
 ### 官方资源
@@ -276,4 +276,3 @@ useEffect(() => {
 **实施人员**: AI Assistant  
 **实施日期**: 2025-10-07  
 **项目版本**: 0.1.3
-

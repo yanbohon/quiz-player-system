@@ -10,7 +10,12 @@ import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
 import { submitGrabbedAnswer, QuestionPoolEmptyError } from "@/lib/fusionClient";
 import { showQuizApiErrorToast } from "@/lib/quizApiError";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
-import { CONTEST_MODES, DEFAULT_MODE, isQaVariantMode } from "./modes";
+import {
+  CONTEST_MODES,
+  DEFAULT_MODE,
+  isQaVariantMode,
+  isUltimateBuzzMode,
+} from "./modes";
 import {
   applyHpPenalty as applyHpPenaltyState,
   createPenaltyGuardKey,
@@ -33,7 +38,6 @@ import {
 type ModeIdInput = ContestModeId | string | null | undefined;
 
 const SPEED_RUN_TIME_LIMIT = 2 * 60; // 3 minutes
-const OCEAN_TIME_LIMIT = 5 * 60; // 5 minutes
 
 function resolveMode(id: ModeIdInput): ContestModeMeta {
   if (!id) return DEFAULT_MODE;
@@ -41,6 +45,7 @@ function resolveMode(id: ModeIdInput): ContestModeMeta {
 }
 
 function createInitialState(meta: ContestModeMeta): QuizRuntimeState {
+  const ultimateBuzzMode = isUltimateBuzzMode(meta.id);
   return {
     mode: meta.id,
     questionIndex: meta.questionFlow === "push" ? -1 : 0,
@@ -50,10 +55,10 @@ function createInitialState(meta: ContestModeMeta): QuizRuntimeState {
     timeRemaining: undefined,
     question: undefined,
     answeringEnabled:
-      meta.id === "ultimate-challenge" ? false : meta.questionFlow !== "push",
+      ultimateBuzzMode ? false : meta.questionFlow !== "push",
     awaitingHost: meta.questionFlow !== "local",
     delegationTargetId: null,
-    phase: meta.id === "ultimate-challenge" ? "waiting" : undefined,
+    phase: ultimateBuzzMode ? "waiting" : undefined,
     oceanEndReason: undefined,
     speedRunEndReason: undefined,
     lastHpPenalty: undefined,
@@ -595,17 +600,20 @@ function resolvePenaltyQuestionId(question: QuizQuestion | undefined) {
 export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const router = useRouter();
   const meta = useMemo(() => resolveMode(modeId), [modeId]);
+  const ultimateBuzzMode = isUltimateBuzzMode(meta.id);
   const shouldEnforceHpElimination =
     meta.features.hasHp;
 
   const {
     user,
+    oceanGroupId,
     clearAnswers,
     setAnswer,
     setCurrentQuestion: setAppCurrentQuestion,
   } = useAppStore(
     useShallow((state) => ({
       user: state.user,
+      oceanGroupId: state.oceanGroupId,
       clearAnswers: state.clearAnswers,
       setAnswer: state.setAnswer,
       setCurrentQuestion: state.setCurrentQuestion,
@@ -624,6 +632,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     grabNextQuestion,
     setCurrentQuestionIndex,
     oceanRemainingCount,
+    oceanStageConfig,
+    oceanStageConfigStatus,
+    oceanStageConfigError,
     questionGateOpened,
   } = useQuizStore(
     useShallow((state) => ({
@@ -636,6 +647,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       grabNextQuestion: state.grabNextQuestion,
       setCurrentQuestionIndex: state.setCurrentQuestionIndex,
       oceanRemainingCount: state.oceanRemainingCount,
+      oceanStageConfig: state.oceanStageConfig,
+      oceanStageConfigStatus: state.oceanStageConfigStatus,
+      oceanStageConfigError: state.oceanStageConfigError,
       questionGateOpened: state.questionGateOpened,
     }))
   );
@@ -660,6 +674,23 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const localFetchInFlightRef = useRef(false);
   const pullFetchInFlightRef = useRef(false);
   const emptyPoolHandledRef = useRef(false);
+
+  const resolveOceanMode = useCallback(() => {
+    if (meta.id !== "ocean-adventure") {
+      return undefined;
+    }
+    if (oceanStageConfigStatus === "error") {
+      throw new Error(oceanStageConfigError ?? "题海环节配置加载失败");
+    }
+    if (
+      oceanStageConfigStatus === "loading" ||
+      oceanStageConfigStatus === "idle" ||
+      !oceanStageConfig
+    ) {
+      throw new Error("题海环节配置加载中，请稍候");
+    }
+    return oceanStageConfig.mode;
+  }, [meta.id, oceanStageConfig, oceanStageConfigError, oceanStageConfigStatus]);
 
   useEffect(() => {
     stateRef.current = state;
@@ -813,7 +844,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       const shouldHold =
         options?.hold ??
         ((meta.questionFlow === "push" || isSpeedRun) && !questionGateOpened);
-      const isUltimate = meta.id === "ultimate-challenge";
+      const isUltimate = ultimateBuzzMode;
       const hasHp = meta.features.hasHp;
       const remainingHp = hasHp
         ? state.hp ?? meta.features.initialHp ?? 0
@@ -892,6 +923,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       questionGateOpened,
       shouldEnforceHpElimination,
       state.hp,
+      ultimateBuzzMode,
     ]
   );
 
@@ -926,11 +958,16 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
 
   useEffect(() => {
     const fetchedCount = quizQuestions.length;
+    const fallbackOceanQuestionCount =
+      typeof oceanStageConfig?.questionCount === "number" &&
+      Number.isFinite(oceanStageConfig.questionCount)
+        ? Math.max(0, Math.floor(oceanStageConfig.questionCount))
+        : DEFAULT_OCEAN_REMAINING_COUNT;
     const sanitizedRemaining =
       meta.id === "ocean-adventure"
         ? Number.isFinite(oceanRemainingCount)
           ? Math.max(0, Math.floor(oceanRemainingCount))
-          : DEFAULT_OCEAN_REMAINING_COUNT
+          : fallbackOceanQuestionCount
         : 0;
 
     const total =
@@ -978,6 +1015,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     setAppCurrentQuestion,
     storeCurrentIndex,
     oceanRemainingCount,
+    oceanStageConfig?.questionCount,
   ]);
 
   useEffect(() => {
@@ -994,15 +1032,24 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
 
     if (meta.id === "ocean-adventure") {
-      if (quizQuestions.length > 0 && !timerInitializedRef.current) {
+      const oceanTimeLimitSeconds =
+        typeof oceanStageConfig?.timeLimitSeconds === "number" &&
+        Number.isFinite(oceanStageConfig.timeLimitSeconds)
+          ? Math.max(1, Math.floor(oceanStageConfig.timeLimitSeconds))
+          : undefined;
+      if (
+        quizQuestions.length > 0 &&
+        !timerInitializedRef.current &&
+        oceanTimeLimitSeconds
+      ) {
         timerInitializedRef.current = true;
-        startGlobalTimer(OCEAN_TIME_LIMIT);
+        startGlobalTimer(oceanTimeLimitSeconds);
       }
       return;
     }
 
     timerInitializedRef.current = false;
-  }, [meta.id, questionGateOpened, quizQuestions.length, startGlobalTimer]);
+  }, [meta.id, oceanStageConfig?.timeLimitSeconds, questionGateOpened, quizQuestions.length, startGlobalTimer]);
 
   const loadModeQuestions = useCallback(async () => {
     if (meta.id === "speed-run") {
@@ -1030,7 +1077,15 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const fetchNextGrabQuestion = useCallback(async () => {
     if (!userId) return;
     try {
-      const question = await grabNextQuestion(userId);
+      const oceanMode = resolveOceanMode();
+      const activeGroupId =
+        meta.id === "ocean-adventure" && oceanMode === "group"
+          ? oceanGroupId ?? undefined
+          : undefined;
+      if (meta.id === "ocean-adventure" && oceanMode === "group" && !activeGroupId) {
+        throw new Error("请先选择红队或蓝队");
+      }
+      const question = await grabNextQuestion(userId, activeGroupId);
       if (!question) {
         handleQuestionPoolEmpty({
           notify: true,
@@ -1045,7 +1100,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       console.error("题海遨游取题失败", error);
       showQuizApiErrorToast(error, "获取题目");
     }
-  }, [grabNextQuestion, handleQuestionPoolEmpty, userId]);
+  }, [grabNextQuestion, handleQuestionPoolEmpty, meta.id, oceanGroupId, resolveOceanMode, userId]);
 
   useEffect(() => {
     if (meta.questionFlow !== "local") return;
@@ -1257,6 +1312,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         if (!userId) {
           throw new Error("缺少选手 ID，无法提交答案");
         }
+        const oceanMode = resolveOceanMode();
+        if (oceanMode === "group" && !oceanGroupId) {
+          throw new Error("请先选择红队或蓝队");
+        }
         const answerPayload: string | string[] =
           Array.isArray(value) && value.length === 1
             ? value[0] ?? ""
@@ -1265,6 +1324,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
           userId,
           questionId: currentQuestion.questionKey,
           answer: answerPayload,
+          groupId: oceanMode === "group" ? oceanGroupId ?? undefined : undefined,
           timeoutMs: options?.timeoutMs,
         });
       }
@@ -1355,7 +1415,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         return submissionOutcome;
       }
 
-      if (meta.id === "ultimate-challenge") {
+      if (ultimateBuzzMode) {
         perQuestionStartRef.current = null;
         setState((prev) => ({
           ...prev,
@@ -1409,6 +1469,9 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       shouldEnforceHpElimination,
       state.hp,
       stopAll,
+      oceanGroupId,
+      resolveOceanMode,
+      ultimateBuzzMode,
       userId,
     ]
   );
@@ -1508,7 +1571,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const delegateAnswerTo = useCallback(
     (targetId: string, options?: { isSelf?: boolean }) => {
       setState((prev) => {
-        if (meta.id !== "ultimate-challenge") {
+        if (!ultimateBuzzMode) {
           return {
             ...prev,
             delegationTargetId: targetId,
@@ -1529,21 +1592,21 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         };
       });
     },
-    [markQuestionTime, meta.id]
+    [markQuestionTime, ultimateBuzzMode]
   );
 
   const triggerBuzzer = useCallback(() => {
-    if (meta.id !== "ultimate-challenge") {
+    if (!ultimateBuzzMode) {
       return;
     }
     setState((prev) => ({
       ...prev,
       awaitingHost: false,
     }));
-  }, [meta.id]);
+  }, [ultimateBuzzMode]);
 
   const resetUltimateRound = useCallback(() => {
-    if (meta.id !== "ultimate-challenge") {
+    if (!ultimateBuzzMode) {
       return;
     }
     perQuestionStartRef.current = null;
@@ -1554,7 +1617,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       delegationTargetId: null,
       phase: prev.question ? "buzz" : "waiting",
     }));
-  }, [meta.id]);
+  }, [ultimateBuzzMode]);
 
   const reset = useCallback(async () => {
     clearAnswers();
@@ -1587,12 +1650,12 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       meta.id === "speed-run"
         ? SPEED_RUN_TIME_LIMIT
         : meta.id === "ocean-adventure"
-          ? OCEAN_TIME_LIMIT
+          ? oceanStageConfig?.timeLimitSeconds
           : undefined;
-    if (limit) {
-      startGlobalTimer(limit);
+    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+      startGlobalTimer(Math.max(1, Math.floor(limit)));
     }
-  }, [meta.id, startGlobalTimer]);
+  }, [meta.id, oceanStageConfig?.timeLimitSeconds, startGlobalTimer]);
 
   const stopLocalTimer = useCallback(() => {
     resetTimers();
@@ -1616,7 +1679,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       applyHostJudgement: meta.features.hasHp ? applyHostJudgement : undefined,
       delegateAnswerTo: meta.features.allowsDelegation ? delegateAnswerTo : undefined,
       triggerBuzzer: meta.features.requiresBuzzer ? triggerBuzzer : undefined,
-      resetUltimateRound: meta.id === "ultimate-challenge" ? resetUltimateRound : undefined,
+      resetUltimateRound: ultimateBuzzMode ? resetUltimateRound : undefined,
     },
     meta,
   };

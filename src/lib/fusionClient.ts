@@ -2,6 +2,11 @@ import { ApiError } from "./api/client";
 import { normalizeQuestion, NormalizedQuestion } from "./normalizeQuestion";
 import { FUSION_API_CONFIG } from "@/config/control";
 import { resolveTihaiUrl } from "@/config/api";
+import {
+  normalizeOceanPlayMode,
+  type OceanGroupId,
+  type OceanPlayMode,
+} from "@/features/quiz/oceanGroup";
 
 interface FusionResponse<T> {
   code: number;
@@ -52,6 +57,28 @@ interface GrabQuestionResponse {
   question?: Record<string, unknown>;
   remainingCount?: number;
   [key: string]: unknown;
+}
+
+interface OceanStageConfigResponse {
+  success?: boolean;
+  message?: string;
+  questionCount?: unknown;
+  timeLimitSeconds?: unknown;
+  roundTimeLimitSeconds?: unknown;
+  mode?: unknown;
+  loadedPresetName?: unknown;
+  source?: unknown;
+  updatedAt?: unknown;
+  [key: string]: unknown;
+}
+
+export interface OceanStageConfig {
+  questionCount: number;
+  timeLimitSeconds: number;
+  mode: OceanPlayMode;
+  loadedPresetName: string | null;
+  source: string | null;
+  updatedAt: string | null;
 }
 
 interface SubmitGrabAnswerResponse {
@@ -182,18 +209,45 @@ function toQuizApiError(error: unknown): QuizApiError {
   );
 }
 
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 type GrabQuestionResult = {
   question?: NormalizedQuestion;
   remainingCount?: number;
 };
 
-async function fetchGrabbedQuestionRaw(userId: string): Promise<GrabQuestionResult> {
+async function fetchGrabbedQuestionRaw(
+  userId: string,
+  groupId?: OceanGroupId
+): Promise<GrabQuestionResult> {
   const response = await fetch(resolveTihaiUrl("/grab-with-details"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ userId }),
+    body: JSON.stringify({
+      userId,
+      ...(groupId ? { groupId } : {}),
+    }),
   });
 
   let data: GrabQuestionResponse | undefined;
@@ -229,16 +283,71 @@ async function fetchGrabbedQuestionRaw(userId: string): Promise<GrabQuestionResu
   return { question, remainingCount };
 }
 
+export async function fetchOceanStageConfig(): Promise<OceanStageConfig> {
+  const response = await fetch(resolveTihaiUrl("/config"), {
+    cache: "no-store",
+  });
+
+  let data: OceanStageConfigResponse | undefined;
+  try {
+    data = await response.json();
+  } catch {
+    data = undefined;
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data?.message === "string" && data.message.trim()
+        ? data.message
+        : response.statusText || "请求失败";
+    throw new ApiError(response.status, message, data);
+  }
+
+  if (data?.success === false) {
+    const message =
+      typeof data.message === "string" && data.message.trim()
+        ? data.message
+        : "题海环节配置获取失败";
+    throw new ApiError(response.status, message, data);
+  }
+
+  const questionCount = normalizeNonNegativeInteger(data?.questionCount);
+  const timeLimitSeconds = normalizeNonNegativeInteger(
+    data?.timeLimitSeconds ?? data?.roundTimeLimitSeconds
+  );
+  const mode = normalizeOceanPlayMode(data?.mode);
+
+  if (
+    questionCount === undefined ||
+    timeLimitSeconds === undefined ||
+    timeLimitSeconds <= 0 ||
+    !mode
+  ) {
+    throw new Error("题海环节配置格式不正确");
+  }
+
+  return {
+    questionCount,
+    timeLimitSeconds,
+    mode,
+    loadedPresetName: normalizeOptionalString(data?.loadedPresetName),
+    source: normalizeOptionalString(data?.source),
+    updatedAt: normalizeOptionalString(data?.updatedAt),
+  };
+}
+
 async function submitGrabbedAnswerRaw(params: {
   userId: string;
   questionId: string;
   answer: string | string[];
+  groupId?: OceanGroupId;
   timeoutMs?: number;
 }): Promise<SubmitGrabAnswerResponse> {
   const payload = {
     userId: params.userId,
     questionId: params.questionId,
     answer: params.answer,
+    ...(params.groupId ? { groupId: params.groupId } : {}),
   };
 
   const controller =
@@ -470,6 +579,7 @@ export async function submitGrabbedAnswer(params: {
   userId: string;
   questionId: string;
   answer: string | string[];
+  groupId?: OceanGroupId;
   timeoutMs?: number;
 }): Promise<SubmitGrabAnswerResponse> {
   const execute = async () => {
@@ -549,7 +659,8 @@ async function acquireGrabLock(): Promise<void> {
 }
 
 export async function fetchGrabbedQuestion(
-  userId: string
+  userId: string,
+  groupId?: OceanGroupId
 ): Promise<GrabQuestionResult> {
   await acquireGrabLock();
 
@@ -559,7 +670,7 @@ export async function fetchGrabbedQuestion(
       attempt += 1;
 
       try {
-        return await fetchGrabbedQuestionRaw(userId);
+        return await fetchGrabbedQuestionRaw(userId, groupId);
       } catch (error) {
         const quizError = toQuizApiError(error);
         if (quizError instanceof QuestionPoolEmptyError) {

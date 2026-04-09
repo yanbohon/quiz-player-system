@@ -1,114 +1,79 @@
-# MQTT Connection Troubleshooting
+# MQTT 故障排查
 
-## Overview
+## 现象
 
-This application uses MQTT for real-time command communication. If you encounter MQTT connection errors, the app will continue to function but without real-time updates.
+常见症状：
 
-## Common Errors
+- 等待页显示 MQTT 未连接
+- 主持人发了 `cmd`，选手端无反应
+- 终极挑战无法抢答或收不到结果广播
 
-### "connack timeout"
+## 先确认配置
 
-This error occurs when the MQTT client cannot establish a connection to the WebSocket server within the timeout period.
+需要重点检查这些环境变量：
 
-**Possible causes:**
-- The MQTT server is unreachable
-- Network connectivity issues
-- Firewall blocking WebSocket connections
-- Incorrect server URL or credentials
+```env
+NEXT_PUBLIC_MQTT_ENABLED=true
+NEXT_PUBLIC_MQTT_URL=wss://your-broker.example.com:8084/mqtt
+NEXT_PUBLIC_MQTT_USERNAME=your-username
+NEXT_PUBLIC_MQTT_PASSWORD=your-password
+NEXT_PUBLIC_MQTT_TOPIC_COMMAND=cmd
+NEXT_PUBLIC_MQTT_TOPIC_CONTROL=quiz/control
+NEXT_PUBLIC_MQTT_TOPIC_RESULT=quiz/result
+NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
+NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX=state
+```
 
-## Solutions
-
-### 1. Increase Connection Timeout (Already Implemented)
-
-The connection timeout has been increased from 4 seconds to 30 seconds to allow more time for establishing connections.
-
-### 2. Disable MQTT (If Server is Unavailable)
-
-If the MQTT server is not available and you want to run the app without MQTT features, you can disable it:
-
-Create a `.env.local` file in the project root with:
+如果本地只做 UI 开发，可直接设为：
 
 ```env
 NEXT_PUBLIC_MQTT_ENABLED=false
 ```
 
-This will disable all MQTT connection attempts and the app will work without real-time command updates.
+## 当前客户端参数
 
-### 3. Configure Custom MQTT Server
+`src/lib/mqtt/client.ts` 当前默认行为：
 
-If you want to use a different MQTT server, create a `.env.local` file with:
+- 连接超时：30 秒
+- 额外超时看门狗：35 秒
+- 重连间隔：5 秒
+- keepalive：60 秒
+- 支持自动重连和重订阅
+
+## 排查顺序
+
+1. 确认 `NEXT_PUBLIC_MQTT_ENABLED` 不是 `false`
+2. 确认 Broker 地址能从浏览器所在网络访问
+3. 确认主题名和主持人端一致
+4. 打开浏览器 Console，查看 `MQTT connection error`、`offline`、`reconnecting` 日志
+5. 用独立 MQTT 客户端验证同一组账号密码是否可连
+
+## 常见问题
+
+### 连接超时
+
+通常是以下原因：
+
+- Broker 地址错误
+- 端口未开放
+- WebSocket 路径不对
+- 账号密码错误
+- 浏览器所在网络无法访问 Broker
+
+### 能连接但收不到命令
+
+重点检查：
+
+- `cmd` / `quiz/control` / `quiz/result` 是否发到了同一个 broker
+- 主题前后是否带了多余 `/`
+- 主持人端 payload 是否符合当前赛制约定
+
+### 本地测试不想依赖 MQTT
+
+可以直接禁用 MQTT：
 
 ```env
-NEXT_PUBLIC_MQTT_ENABLED=true
-NEXT_PUBLIC_MQTT_URL=wss://your-mqtt-server.com:8084/mqtt
-NEXT_PUBLIC_MQTT_USERNAME=your-username
-NEXT_PUBLIC_MQTT_PASSWORD=your-password
+NEXT_PUBLIC_MQTT_ENABLED=false
 ```
 
-## Configuration Options
-
-All MQTT configuration is handled through environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_MQTT_ENABLED` | `true` | Enable/disable MQTT connections |
-| `NEXT_PUBLIC_MQTT_URL` | `wss://ws.ohvfx.com:8084/mqtt` | WebSocket server URL |
-| `NEXT_PUBLIC_MQTT_USERNAME` | `xdx` | MQTT username |
-| `NEXT_PUBLIC_MQTT_PASSWORD` | `xdx12138` | MQTT password |
-| `NEXT_PUBLIC_MQTT_TOPIC_COMMAND` | `cmd` | Host command broadcast topic |
-| `NEXT_PUBLIC_MQTT_TOPIC_CONTROL` | `quiz/control` | Ultimate challenge control topic |
-| `NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX` | `state` | Presence topic prefix (`<prefix>/<clientId>`) |
-
-## Implementation Details
-
-### Error Handling
-
-- MQTT connection errors are caught and logged but don't crash the app
-- The app continues to function without real-time features if MQTT fails
-- Automatic reconnection attempts with 5-second intervals
-- Clear console warnings when MQTT is unavailable
-
-### Timeouts
-
-- **Connection timeout**: 20 seconds
-- **Reconnect period**: 5 seconds between attempts
-- **Keepalive**: 45 seconds
-- **Heartbeat publish interval**: ~22.5 seconds (half of keepalive)
-- **Total connection timeout**: ~25 seconds (for safety)
-
-### Graceful Degradation
-
-When MQTT connection fails:
-1. An error is logged to the console
-2. The app continues to load and function normally
-3. Real-time command features are disabled
-4. Manual refresh or API polling can be used instead
-
-## Testing MQTT Connection
-
-To test if your MQTT server is reachable, you can use an MQTT client tool like:
-
-- MQTT.fx
-- MQTT Explorer
-- mosquitto_sub/pub (command line)
-
-Example test with mosquitto_sub:
-```bash
-mosquitto_sub -h ws.ohvfx.com -p 8084 -t "cmd" -u xdx -P xdx12138
-```
-
-## Development Recommendations
-
-1. **For local development without MQTT**: Set `NEXT_PUBLIC_MQTT_ENABLED=false`
-2. **For testing MQTT features**: Ensure the server is reachable and credentials are correct
-3. **For production**: Verify server availability before deployment
-
-## Need Help?
-
-If you continue to experience MQTT connection issues:
-
-1. Check your network connectivity
-2. Verify the MQTT server is running and accessible
-3. Check firewall settings
-4. Review browser console for detailed error messages
-5. Try disabling MQTT to confirm the app works otherwise
+这样页面仍可打开，适合纯 UI 调整和非实时逻辑开发。

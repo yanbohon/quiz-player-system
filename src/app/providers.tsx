@@ -10,6 +10,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
 import { useSessionGuard } from "@/hooks/useSessionGuard";
 import { useMqttLeader } from "@/hooks/useMqttLeader";
+import { E2EBridge } from "@/app/E2EBridge";
 
 function ActiveControlCommands({
   clientId,
@@ -129,6 +130,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <E2EBridge />
       <ControlCommandBridge />
       {children}
       {showQueryDevtools ? <ReactQueryDevtools initialIsOpen={false} /> : null}

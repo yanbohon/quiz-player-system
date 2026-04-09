@@ -8,17 +8,22 @@ import {
   fetchDatasheetRecords,
   fetchFusionEvents,
   fetchGrabbedQuestion,
+  fetchOceanStageConfig,
   fetchNormalizedDatasheetQuestions,
+  OceanStageConfig,
   patchDatasheetRecords,
   QuestionPoolEmptyError,
 } from "@/lib/fusionClient";
 import { NormalizedQuestion } from "@/lib/normalizeQuestion";
+import type { OceanGroupId } from "@/features/quiz/oceanGroup";
 
 const INITIAL_HP = 3;
 const COMMAND_LOG_LIMIT = 30;
 export const DEFAULT_OCEAN_REMAINING_COUNT = 600;
+const E2E_QUIZ_STATE_KEY = "contestant-app:e2e-quiz-state";
 
 type QuestionLoadStatus = "idle" | "loading" | "success" | "error";
+type OceanStageConfigStatus = "idle" | "loading" | "success" | "error";
 
 type StageKind =
   | "meta"
@@ -53,6 +58,7 @@ function resolveStageKind(name?: string): StageKind {
     case "争分夺秒":
     case "终极挑战":
     case "同分加题":
+    case "抢答冲刺":
       return "standard";
     default:
       if (typeof name === "string") {
@@ -70,6 +76,9 @@ function resolveStageKind(name?: string): StageKind {
           return "standard";
         }
         if (/^一站到底/u.test(trimmed)) {
+          return "standard";
+        }
+        if (/^抢答冲刺/u.test(trimmed)) {
           return "standard";
         }
       }
@@ -117,6 +126,9 @@ interface QuizState {
   currentIndex: number;
   answers: Record<string, string[]>;
   oceanRemainingCount: number;
+  oceanStageConfig?: OceanStageConfig;
+  oceanStageConfigStatus: OceanStageConfigStatus;
+  oceanStageConfigError?: string;
   questionLoadStatus: QuestionLoadStatus;
   questionLoadAttempts: number;
   questionLoadError?: string;
@@ -188,7 +200,15 @@ interface QuizState {
   activateStageById: (stageId: string, userId: string) => Promise<void>;
   refreshTeamProfile: (generalSheetId: string, userId: string) => Promise<TeamProfile | undefined>;
   ensureTeamProfile: (identifier: string) => Promise<TeamProfile | undefined>;
-  refreshScoreRecord: (scoreSheetId: string, userId: string) => Promise<ScoreRecord | undefined>;
+  clearScoreRecord: () => void;
+  refreshScoreRecord: (
+    scoreSheetId: string,
+    userId: string,
+    options?: {
+      fieldKeys?: string[];
+      allowAnyFieldFallback?: boolean;
+    }
+  ) => Promise<ScoreRecord | undefined>;
   submitAnswerChoice: (params: {
     datasheetId: string;
     recordId: string;
@@ -212,8 +232,33 @@ interface QuizState {
     fieldKey: string;
     status: string;
   }) => Promise<void>;
-  grabNextQuestion: (userId: string) => Promise<NormalizedQuestion | undefined>;
+  grabNextQuestion: (
+    userId: string,
+    groupId?: OceanGroupId
+  ) => Promise<NormalizedQuestion | undefined>;
+  loadOceanStageConfig: () => Promise<OceanStageConfig>;
   fetchWaitingRankings: () => Promise<void>;
+}
+
+function readE2EQuizSeed(): Partial<QuizState> {
+  if (
+    process.env.NEXT_PUBLIC_E2E !== "true" ||
+    typeof window === "undefined"
+  ) {
+    return {};
+  }
+
+  const raw = window.localStorage.getItem(E2E_QUIZ_STATE_KEY);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw) as Partial<QuizState>;
+  } catch {
+    window.localStorage.removeItem(E2E_QUIZ_STATE_KEY);
+    return {};
+  }
 }
 
 const RANK_STAGE_NAME = "总分排名";
@@ -287,7 +332,11 @@ const IDENTIFIER_FIELD_KEYS = [
   "id",
   "编号",
   "school",
+  "School",
   "学校",
+  "team_id",
+  "teamId",
+  "Team ID",
   "city-id",
   "cityId",
   "选手ID",
@@ -333,26 +382,36 @@ function buildTeamDirectory(records: DatasheetRecord[]): Record<string, TeamProf
 
 function findRecordByIdentifier(
   records: DatasheetRecord[],
-  identifier: string
+  identifier: string,
+  options?: {
+    fieldKeys?: string[];
+    allowAnyFieldFallback?: boolean;
+  }
 ): DatasheetRecord | undefined {
   const target = identifier.trim();
+  if (!target) {
+    return undefined;
+  }
+  const fieldKeys = options?.fieldKeys ?? IDENTIFIER_FIELD_KEYS;
   for (const record of records) {
     const fields = record.fields;
     if (!fields) continue;
-    for (const key of IDENTIFIER_FIELD_KEYS) {
+    for (const key of fieldKeys) {
       const value = fields[key];
       if (value !== undefined && String(value).trim() === target) {
         return record;
       }
     }
-    // Fallback: search any string field
-    if (
-      Object.values(fields).some(
-        (value) =>
-          typeof value === "string" && value.trim() === target
-      )
-    ) {
-      return record;
+    if (options?.allowAnyFieldFallback !== false) {
+      // Fallback: search any string field
+      if (
+        Object.values(fields).some(
+          (value) =>
+            typeof value === "string" && value.trim() === target
+        )
+      ) {
+        return record;
+      }
     }
   }
   return undefined;
@@ -454,11 +513,17 @@ function toRankEntry(record: DatasheetRecord): RankEntry | undefined {
 }
 
 export const useQuizStore = create<QuizState>()(
-  immer((set, get) => ({
+  immer((set, get) => {
+    const e2eSeed = readE2EQuizSeed();
+
+    return {
     questions: [],
     currentIndex: 0,
     answers: {},
     oceanRemainingCount: DEFAULT_OCEAN_REMAINING_COUNT,
+    oceanStageConfig: undefined,
+    oceanStageConfigStatus: "idle",
+    oceanStageConfigError: undefined,
     questionLoadStatus: "idle",
     questionLoadAttempts: 0,
     questionLoadError: undefined,
@@ -485,6 +550,7 @@ export const useQuizStore = create<QuizState>()(
     rankStatus: "idle",
     rankEntries: [],
     rankError: undefined,
+    ...e2eSeed,
 
     currentQuestion: () => {
       const state = get();
@@ -621,6 +687,9 @@ export const useQuizStore = create<QuizState>()(
         state.commandLog = [];
         state.waitingForStageStart = false;
         state.oceanRemainingCount = DEFAULT_OCEAN_REMAINING_COUNT;
+        state.oceanStageConfig = undefined;
+        state.oceanStageConfigStatus = "idle";
+        state.oceanStageConfigError = undefined;
         state.questionLoadStatus = "idle";
         state.questionLoadAttempts = 0;
         state.questionLoadError = undefined;
@@ -799,6 +868,9 @@ export const useQuizStore = create<QuizState>()(
           draft.teamDirectorySheetId = undefined;
           draft.scoreRecord = undefined;
           draft.waitingForStageStart = false;
+          draft.oceanStageConfig = undefined;
+          draft.oceanStageConfigStatus = "idle";
+          draft.oceanStageConfigError = undefined;
           draft.isLoading = false;
         });
 
@@ -844,7 +916,14 @@ export const useQuizStore = create<QuizState>()(
           draft.teamDirectorySheetId = stage.generalSheetId;
         }
         if (stage.kind === "grab") {
-          draft.oceanRemainingCount = DEFAULT_OCEAN_REMAINING_COUNT;
+          draft.oceanRemainingCount = 0;
+          draft.oceanStageConfig = undefined;
+          draft.oceanStageConfigStatus = "loading";
+          draft.oceanStageConfigError = undefined;
+        } else {
+          draft.oceanStageConfig = undefined;
+          draft.oceanStageConfigStatus = "idle";
+          draft.oceanStageConfigError = undefined;
         }
         draft.questionLoadStatus = isStandardStage ? "loading" : "idle";
         draft.questionLoadAttempts = 0;
@@ -913,6 +992,14 @@ export const useQuizStore = create<QuizState>()(
             draft.questionLoadAttempts = 0;
             draft.questionLoadError = undefined;
           });
+        }
+
+        if (stage.kind === "grab") {
+          try {
+            await get().loadOceanStageConfig();
+          } catch (error) {
+            console.error("题海环节配置加载失败", error);
+          }
         }
 
         set((draft) => {
@@ -993,10 +1080,23 @@ export const useQuizStore = create<QuizState>()(
       return matched;
     },
 
-    refreshScoreRecord: async (scoreSheetId, userId) => {
+    clearScoreRecord: () => {
+      set((state) => {
+        state.scoreRecord = undefined;
+      });
+    },
+
+    refreshScoreRecord: async (scoreSheetId, userId, options) => {
+      if (!userId || !userId.trim()) {
+        get().clearScoreRecord();
+        return undefined;
+      }
       const records = await fetchDatasheetRecords(scoreSheetId);
-      const match = findRecordByIdentifier(records, userId);
-      if (!match || !match.fields) return undefined;
+      const match = findRecordByIdentifier(records, userId, options);
+      if (!match || !match.fields) {
+        get().clearScoreRecord();
+        return undefined;
+      }
       const scoreRecord: ScoreRecord = {
         recordId: String(match.recordId ?? ""),
         fields: { ...match.fields },
@@ -1090,9 +1190,9 @@ export const useQuizStore = create<QuizState>()(
       });
     },
 
-    grabNextQuestion: async (userId) => {
+    grabNextQuestion: async (userId, groupId) => {
       try {
-        const result = await fetchGrabbedQuestion(userId);
+        const result = await fetchGrabbedQuestion(userId, groupId);
         if (typeof result.remainingCount === "number") {
           const remaining = result.remainingCount;
           set((draft) => {
@@ -1109,6 +1209,34 @@ export const useQuizStore = create<QuizState>()(
             draft.oceanRemainingCount = 0;
           });
         }
+        throw error;
+      }
+    },
+
+    loadOceanStageConfig: async () => {
+      set((draft) => {
+        draft.oceanStageConfigStatus = "loading";
+        draft.oceanStageConfigError = undefined;
+      });
+
+      try {
+        const config = await fetchOceanStageConfig();
+        set((draft) => {
+          draft.oceanStageConfig = config;
+          draft.oceanStageConfigStatus = "success";
+          draft.oceanStageConfigError = undefined;
+          draft.oceanRemainingCount = config.questionCount;
+        });
+        return config;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "题海环节配置获取失败";
+        set((draft) => {
+          draft.oceanStageConfig = undefined;
+          draft.oceanStageConfigStatus = "error";
+          draft.oceanStageConfigError = message;
+          draft.oceanRemainingCount = 0;
+        });
         throw error;
       }
     },
@@ -1159,5 +1287,5 @@ export const useQuizStore = create<QuizState>()(
         });
       }
     },
-  }))
+  }})
 );
