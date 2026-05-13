@@ -36,6 +36,21 @@ describe("modes", () => {
   });
 
   it("defines the expected capability matrix for high-risk contest modes", () => {
+    expect(CONTEST_MODES["qa-challenge"]).toMatchObject({
+      channel: "mqtt",
+      questionFlow: "push",
+      answerFlow: "immediate",
+      questionFormat: "standard",
+      description:
+        "题目先由专属队伍选择作答队伍，可选择本队直接作答或挑战其他队伍，再由被选队伍在主持人指令下完成作答。",
+      features: {
+        hasHp: false,
+        requiresBuzzer: false,
+        allowsDelegation: false,
+        supportsTimer: false,
+      },
+    });
+
     expect(CONTEST_MODES["last-stand-group"]).toMatchObject({
       channel: "mqtt",
       questionFlow: "push",

@@ -2,6 +2,7 @@
 
 export type ContestModeId =
   | "qa"
+  | "qa-challenge"
   | "qa-20"
   | "qa-30"
   | "qa-50"
@@ -94,7 +95,8 @@ export type UltimatePhase =
   | "buzz"
   | "decision"
   | "locked"
-  | "answer";
+  | "answer"
+  | "submitted";
 
 export interface HpPenaltyRecord {
   hpBefore: number;

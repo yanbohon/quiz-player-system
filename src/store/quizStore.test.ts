@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchDatasheetRecordsMock, fetchOceanStageConfigMock } = vi.hoisted(() => ({
+const { fetchDatasheetRecordsMock, fetchOceanStageConfigMock, patchDatasheetRecordsMock } = vi.hoisted(() => ({
   fetchDatasheetRecordsMock: vi.fn(),
   fetchOceanStageConfigMock: vi.fn(),
+  patchDatasheetRecordsMock: vi.fn(),
 }));
 
 vi.mock("@/lib/fusionClient", async () => {
@@ -11,6 +12,7 @@ vi.mock("@/lib/fusionClient", async () => {
     ...actual,
     fetchDatasheetRecords: fetchDatasheetRecordsMock,
     fetchOceanStageConfig: fetchOceanStageConfigMock,
+    patchDatasheetRecords: patchDatasheetRecordsMock,
   };
 });
 
@@ -20,6 +22,7 @@ describe("quizStore refreshScoreRecord", () => {
   beforeEach(() => {
     fetchDatasheetRecordsMock.mockReset();
     fetchOceanStageConfigMock.mockReset();
+    patchDatasheetRecordsMock.mockReset();
     useQuizStore.getState().reset();
   });
 
@@ -95,6 +98,112 @@ describe("quizStore refreshScoreRecord", () => {
     });
     expect(state.oceanStageConfigStatus).toBe("success");
     expect(state.oceanRemainingCount).toBe(20);
+  });
+
+  it("updates question raw fields in memory", () => {
+    useQuizStore.setState({
+      questions: [
+        {
+          id: "q1",
+          type: "multiple",
+          content: "question",
+          options: [],
+          answer: [],
+          raw: { owner: "1001" },
+          source: "default",
+        },
+      ],
+    });
+
+    useQuizStore.getState().setQuestionFieldValue("q1", "challengeTarget", "1002");
+
+    expect(useQuizStore.getState().questions[0]?.raw).toMatchObject({
+      owner: "1001",
+      challengeTarget: "1002",
+    });
+  });
+
+  it("increments a score field for a matched identifier", async () => {
+    fetchDatasheetRecordsMock.mockResolvedValue([
+      {
+        recordId: "score-record-1",
+        fields: {
+          用户ID: "1001",
+          challengeScore: 20,
+        },
+      },
+    ]);
+    patchDatasheetRecordsMock.mockResolvedValue(undefined);
+
+    const nextValue = await useQuizStore.getState().incrementScoreFieldByIdentifier({
+      datasheetId: "score-sheet",
+      identifier: "1001",
+      fieldKey: "challengeScore",
+      delta: 20,
+    });
+
+    expect(nextValue).toBe(40);
+    expect(patchDatasheetRecordsMock).toHaveBeenCalledWith("score-sheet", {
+      records: [
+        {
+          recordId: "score-record-1",
+          fields: {
+            challengeScore: 40,
+          },
+        },
+      ],
+    });
+  });
+
+  it("reuses the event-level general sheet when a stage does not declare its own team directory", async () => {
+    fetchDatasheetRecordsMock.mockResolvedValue([
+      {
+        recordId: "rec-school-1",
+        fields: {
+          用户ID: "1001",
+          名称: "1.上海理工大学测试",
+        },
+      },
+      {
+        recordId: "rec-school-2",
+        fields: {
+          用户ID: "1002",
+          名称: "2.上海政法学院",
+        },
+      },
+    ]);
+
+    useQuizStore.setState({
+      stages: [
+        {
+          order: 2,
+          stageId: "2",
+          recordId: "record-stage-2",
+          name: "有问必答（挑战版）",
+          displayName: "有问必答(挑战题)",
+          kind: "standard",
+          rawFields: {},
+        },
+      ],
+      teamDirectorySheetId: "school-sheet",
+      teamProfiles: {
+        stale: {
+          recordId: "rec-stale",
+          identifier: "stale",
+          fields: { 用户ID: "stale", 名称: "过期数据" },
+        },
+      },
+    });
+
+    await useQuizStore.getState().activateStageById("2", "1001");
+
+    expect(fetchDatasheetRecordsMock).toHaveBeenCalledWith("school-sheet");
+    expect(useQuizStore.getState().teamProfiles["1001"]?.displayName).toBe(
+      "1.上海理工大学测试"
+    );
+    expect(useQuizStore.getState().teamProfiles["1002"]?.displayName).toBe(
+      "2.上海政法学院"
+    );
   });
 
   it("records ocean stage config failures and clears the remaining count", async () => {

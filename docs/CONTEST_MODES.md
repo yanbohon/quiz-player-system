@@ -106,7 +106,7 @@
 | `qa-50` | 有问必答(50) | `cmd: <赛段ID>-start` | MQTT | Fusion 标准题 | `cmd` 数字切题 | 同 `qa` | 当前实现与 `qa` 仅 modeId / 名称不同 |
 | `last-stand` | 一站到底 | `cmd: <赛段ID>-start` | MQTT | Fusion 标准题 | `cmd` 数字切题 | 选手先作答，主持人用 `submit` 收题 | 3 点血量，答错扣血，可 `retract` 回退 |
 | `last-stand-group` | 一站到底（分组） | `cmd: <赛段ID>-start` | MQTT | Fusion 标准题 | `cmd` 数字切题 | 同 `last-stand` | 1 点血量，按组状态值同步存活/淘汰 |
-| `speed-run` | 争分夺秒 | `cmd: <赛段ID>-start` | API | 赛段题库一次性加载 | 赛段启动后等待首次数字切题开闸 | 选手手动提交，自动进入下一题 | 全局计时 120 秒，本地顺序推进 |
+| `speed-run` | 争分夺秒 | `cmd: <赛段ID>-start` | API | 赛段题库一次性加载 | 赛段启动后等待首次数字切题开闸 | 选手手动提交，自动进入下一题 | 全局计时读取当前赛段 `URL` 纯数字秒数，未填时默认 120 秒 |
 | `ocean-adventure` | 题海遨游 | `cmd: <赛段ID>-start` | API | 题海接口逐题拉取 | `pool-start` 抢下一题 | 选手手动提交，自动继续抢下一题 | 2 点血量，全局计时 300 秒，支持个人/团队 |
 | `ultimate-challenge` | 终极挑战 | `cmd: <赛段ID>-start` | Hybrid | Fusion 标准题 + MQTT 抢答控制 | `cmd` 数字切题 + `quiz/control` 开启抢答 | 选手先作答，主持人用 `submit` 收题 | 抢答、锁定、作答三段式 |
 | `buzzer-sprint` | 抢答冲刺 | `cmd: <赛段ID>-start` | Hybrid | Fusion 标准题 + MQTT 抢答控制 | `cmd` 数字切题 + `quiz/control` 开启抢答 | 选手先作答，主持人用 `submit` 收题 | 全题型抢答，赛前确认红/蓝队，按队伍结算胜者 |
@@ -249,7 +249,7 @@
 #### 计时
 
 - 使用全局倒计时。
-- 当前代码实际时长为 120 秒。
+- 当前代码会读取当前赛段行 `URL` 字段中的纯数字秒数；为空或无效时回退到 120 秒。
 - 倒计时在题目闸门打开后启动，不在赛段刚进入时启动。
 
 #### 结果页

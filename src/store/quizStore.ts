@@ -179,6 +179,11 @@ interface QuizState {
   pushQuestion: (question: NormalizedQuestion) => void;
   removeQuestion: (questionId: string) => void;
   setCurrentQuestionIndex: (index: number) => void;
+  setQuestionFieldValue: (
+    questionId: string,
+    fieldKey: string,
+    value?: string
+  ) => void;
   setAnswer: (questionId: string, answer: string | string[]) => void;
   nextQuestion: () => void;
   previousQuestion: () => void;
@@ -232,6 +237,12 @@ interface QuizState {
     fieldKey: string;
     status: string;
   }) => Promise<void>;
+  incrementScoreFieldByIdentifier: (params: {
+    datasheetId: string;
+    identifier: string;
+    fieldKey: string;
+    delta: number;
+  }) => Promise<number>;
   grabNextQuestion: (
     userId: string,
     groupId?: OceanGroupId
@@ -646,6 +657,24 @@ export const useQuizStore = create<QuizState>()(
         state.questionGateOpened = true;
       }),
 
+    setQuestionFieldValue: (questionId, fieldKey, value) =>
+      set((state) => {
+        const target = state.questions.find((question) => question.id === questionId);
+        if (!target) return;
+        const nextRaw =
+          target.raw && typeof target.raw === "object"
+            ? { ...target.raw }
+            : {};
+
+        if (value === undefined) {
+          delete nextRaw[fieldKey];
+        } else {
+          nextRaw[fieldKey] = value;
+        }
+
+        target.raw = nextRaw;
+      }),
+
     setAnswer: (questionId, answer) =>
       set((state) => {
         state.answers[questionId] = normalizeAnswerValue(answer);
@@ -902,6 +931,7 @@ export const useQuizStore = create<QuizState>()(
       }
 
       const isStandardStage = stage.kind === "standard";
+      const fallbackGeneralSheetId = stage.generalSheetId ?? state.teamDirectorySheetId;
 
       set((draft) => {
         draft.isLoading = true;
@@ -911,8 +941,8 @@ export const useQuizStore = create<QuizState>()(
         draft.questions = [];
         draft.answers = {};
         draft.progress = { total: 0, answered: 0 };
-        draft.teamProfiles = {};
         if (stage.generalSheetId) {
+          draft.teamProfiles = {};
           draft.teamDirectorySheetId = stage.generalSheetId;
         }
         if (stage.kind === "grab") {
@@ -1006,8 +1036,8 @@ export const useQuizStore = create<QuizState>()(
           draft.isLoading = false;
         });
 
-        if (stage.generalSheetId) {
-          await get().refreshTeamProfile(stage.generalSheetId, userId);
+        if (fallbackGeneralSheetId) {
+          await get().refreshTeamProfile(fallbackGeneralSheetId, userId);
         }
 
         if (stage.scoreSheetId) {
@@ -1188,6 +1218,55 @@ export const useQuizStore = create<QuizState>()(
           draft.scoreRecord.fields[fieldKey] = normalizedStatus;
         }
       });
+    },
+
+    incrementScoreFieldByIdentifier: async ({
+      datasheetId,
+      identifier,
+      fieldKey,
+      delta,
+    }) => {
+      const records = await fetchDatasheetRecords(datasheetId);
+      const match = findRecordByIdentifier(records, identifier, {
+        allowAnyFieldFallback: false,
+      });
+      if (!match || !match.fields) {
+        throw new Error(`未找到分数记录 ${identifier}`);
+      }
+
+      const recordId = String(match.recordId ?? "");
+      const currentRaw = match.fields[fieldKey];
+      const currentValue =
+        typeof currentRaw === "number"
+          ? currentRaw
+          : typeof currentRaw === "string"
+            ? Number.parseFloat(currentRaw)
+            : 0;
+      const safeCurrentValue = Number.isFinite(currentValue) ? currentValue : 0;
+      const nextValue = safeCurrentValue + delta;
+
+      const payload = {
+        records: [
+          {
+            recordId,
+            fields: {
+              [fieldKey]: nextValue,
+            },
+          },
+        ],
+      };
+      await patchDatasheetRecords(datasheetId, payload);
+
+      set((draft) => {
+        if (
+          draft.scoreRecord?.recordId === recordId &&
+          draft.scoreRecord.fields
+        ) {
+          draft.scoreRecord.fields[fieldKey] = nextValue;
+        }
+      });
+
+      return nextValue;
     },
 
     grabNextQuestion: async (userId, groupId) => {

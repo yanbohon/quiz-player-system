@@ -37,7 +37,28 @@ import {
 
 type ModeIdInput = ContestModeId | string | null | undefined;
 
-const SPEED_RUN_TIME_LIMIT = 2 * 60; // 3 minutes
+const DEFAULT_SPEED_RUN_TIME_LIMIT = 120;
+
+function resolveSpeedRunTimeLimitSeconds(
+  rawFields: Record<string, unknown> | undefined
+) {
+  const rawValue = rawFields?.URL;
+  const normalized =
+    typeof rawValue === "string"
+      ? rawValue.trim()
+      : typeof rawValue === "number" && Number.isFinite(rawValue)
+        ? String(rawValue)
+        : undefined;
+
+  if (normalized && /^\d+$/u.test(normalized)) {
+    const parsed = Number.parseInt(normalized, 10);
+    if (parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return DEFAULT_SPEED_RUN_TIME_LIMIT;
+}
 
 function resolveMode(id: ModeIdInput): ContestModeMeta {
   if (!id) return DEFAULT_MODE;
@@ -625,6 +646,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const {
     questions: storeQuestions,
     currentIndex: storeCurrentIndex,
+    currentStage,
     isLoading: quizLoading,
     waitingForStageStart,
     loadQuestions,
@@ -640,6 +662,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     useShallow((state) => ({
       questions: state.questions,
       currentIndex: state.currentIndex,
+      currentStage: state.currentStage,
       isLoading: state.isLoading,
       waitingForStageStart: state.waitingForStageStart,
       loadQuestions: state.loadQuestions,
@@ -658,6 +681,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     createInitialState(meta)
   );
   const stateRef = useRef<QuizRuntimeState>(createInitialState(meta));
+  const speedRunTimeLimitSeconds = useMemo(
+    () => resolveSpeedRunTimeLimitSeconds(currentStage?.rawFields),
+    [currentStage?.rawFields]
+  );
 
   const wrongCountRef = useRef(0);
   const globalTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -1026,7 +1053,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
       }
       if (quizQuestions.length > 0 && !timerInitializedRef.current) {
         timerInitializedRef.current = true;
-        startGlobalTimer(SPEED_RUN_TIME_LIMIT);
+        startGlobalTimer(speedRunTimeLimitSeconds);
       }
       return;
     }
@@ -1049,7 +1076,14 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
 
     timerInitializedRef.current = false;
-  }, [meta.id, oceanStageConfig?.timeLimitSeconds, questionGateOpened, quizQuestions.length, startGlobalTimer]);
+  }, [
+    meta.id,
+    oceanStageConfig?.timeLimitSeconds,
+    questionGateOpened,
+    quizQuestions.length,
+    speedRunTimeLimitSeconds,
+    startGlobalTimer,
+  ]);
 
   const loadModeQuestions = useCallback(async () => {
     if (meta.id === "speed-run") {
@@ -1406,7 +1440,12 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
         stats: oceanSubmission?.stats,
       };
 
-      if (isQaVariantMode(meta.id) || meta.id === "last-stand" || meta.id === "last-stand-group") {
+      if (
+        isQaVariantMode(meta.id) ||
+        meta.id === "qa-challenge" ||
+        meta.id === "last-stand" ||
+        meta.id === "last-stand-group"
+      ) {
         setState((prev) => ({
           ...prev,
           awaitingHost: true,
@@ -1421,7 +1460,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
           ...prev,
           awaitingHost: true,
           answeringEnabled: false,
-          phase: "waiting",
+          phase: "submitted",
         }));
         return submissionOutcome;
       }
@@ -1648,14 +1687,19 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   const startLocalTimer = useCallback(() => {
     const limit =
       meta.id === "speed-run"
-        ? SPEED_RUN_TIME_LIMIT
+        ? speedRunTimeLimitSeconds
         : meta.id === "ocean-adventure"
           ? oceanStageConfig?.timeLimitSeconds
           : undefined;
     if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
       startGlobalTimer(Math.max(1, Math.floor(limit)));
     }
-  }, [meta.id, oceanStageConfig?.timeLimitSeconds, startGlobalTimer]);
+  }, [
+    meta.id,
+    oceanStageConfig?.timeLimitSeconds,
+    speedRunTimeLimitSeconds,
+    startGlobalTimer,
+  ]);
 
   const stopLocalTimer = useCallback(() => {
     resetTimers();

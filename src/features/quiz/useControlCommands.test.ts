@@ -220,6 +220,16 @@ describe("resolveModeForStage", () => {
         })
       )
     ).toBe("buzzer-sprint");
+
+    expect(
+      resolveModeForStage(
+        createStage({
+          rawFields: {
+            modeId: "有问必答挑战题",
+          },
+        })
+      )
+    ).toBe("qa-challenge");
   });
 
   it("falls back to stage names and stage kind when raw fields are absent", () => {

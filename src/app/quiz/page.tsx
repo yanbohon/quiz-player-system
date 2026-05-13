@@ -10,6 +10,7 @@ import { mqttService } from "@/lib/mqtt/client";
 import { useMqttSubscription } from "@/lib/mqtt/hooks";
 import { MQTT_TOPICS } from "@/config/control";
 import { resolveTihaiUrl } from "@/config/api";
+import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
 import { useQuizRuntime } from "@/features/quiz/useQuizRuntime";
@@ -19,6 +20,18 @@ import {
   isQaVariantMode,
   isUltimateBuzzMode,
 } from "@/features/quiz/modes";
+import {
+  buildChallengeCommand,
+  buildChallengeSelectionOptions,
+  collectUsedChallengeTargets,
+  parseChallengeCommand,
+  resolveChallengeDisplayName,
+  resolveChallengeOwner,
+  resolveChallengeScoreBeneficiary,
+  resolveChallengeScoreField,
+  resolveChallengeTarget,
+  validateQaChallengeQuestions,
+} from "@/features/quiz/challenge";
 import {
   getOceanGroupLabel,
   getOceanPlayModeLabel,
@@ -48,7 +61,6 @@ import {
 } from "@/features/quiz/components/QuizIcons";
 import type { SmoothSerializedStroke } from "@/features/quiz/components/SmoothDrawingCanvas";
 import {
-  CommandSubmissionResult,
   EliminationStatePanel,
 } from "@/features/quiz/components/QuizFeedbackPanels";
 import { QuestionLoadingState } from "@/features/quiz/components/QuestionLoadingState";
@@ -94,15 +106,25 @@ import styles from "./page.module.css";
 const DEFAULT_NOTIFY_OFFSET = 68;
 const FILL_SKETCH_CACHE_LIMIT = 10;
 const FILL_PREVIEW_STORAGE_KEY = "quiz-fill-preview-cache";
+type ClosableDialog = { close: () => void };
+let activeSprintTeamDialog: ClosableDialog | null = null;
+
+function closeSprintTeamSelectionDialog() {
+  activeSprintTeamDialog?.close();
+  activeSprintTeamDialog = null;
+}
 
 function promptSprintTeamSelection(): Promise<OceanGroupId | null> {
   return new Promise((resolve) => {
     let settled = false;
-    let dialogInstance: { close: () => void } | undefined;
+    let dialogInstance: ClosableDialog | undefined;
     const finish = (value: OceanGroupId | null, shouldClose = true) => {
       if (settled) return;
       settled = true;
       resolve(value);
+      if (activeSprintTeamDialog === dialogInstance) {
+        activeSprintTeamDialog = null;
+      }
       if (shouldClose) {
         dialogInstance?.close();
       }
@@ -136,6 +158,7 @@ function promptSprintTeamSelection(): Promise<OceanGroupId | null> {
         finish(null, false);
       },
     });
+    activeSprintTeamDialog = dialogInstance ?? null;
   });
 }
 
@@ -275,6 +298,7 @@ function QuizPageContent() {
 
   const { state, controls, meta } = useQuizRuntime(mode);
   const isQaMode = isQaVariantMode(meta.id);
+  const isQaChallengeMode = meta.id === "qa-challenge";
   const isLastStandMode = meta.id === "last-stand" || meta.id === "last-stand-group";
   const shouldEnforceLastStandElimination = true;
   const shouldSyncLastStandStatus = true;
@@ -290,8 +314,10 @@ function QuizPageContent() {
     currentStage,
     teamProfile,
     scoreRecord,
+    setQuestionFieldValue,
     submitAnswerChoice,
     submitJudgeResult,
+    incrementScoreFieldByIdentifier,
     updateScoreStatus,
     normalizedQuestions,
     teamProfiles,
@@ -312,8 +338,10 @@ function QuizPageContent() {
       currentStage: storeState.currentStage,
       teamProfile: storeState.teamProfile,
       scoreRecord: storeState.scoreRecord,
+      setQuestionFieldValue: storeState.setQuestionFieldValue,
       submitAnswerChoice: storeState.submitAnswerChoice,
       submitJudgeResult: storeState.submitJudgeResult,
+      incrementScoreFieldByIdentifier: storeState.incrementScoreFieldByIdentifier,
       updateScoreStatus: storeState.updateScoreStatus,
       normalizedQuestions: storeState.questions,
       teamProfiles: storeState.teamProfiles,
@@ -335,6 +363,7 @@ function QuizPageContent() {
   const [matchingPairs, setMatchingPairs] = useState<string[]>([]);
   const [canBuzz, setCanBuzz] = useState(() => !isUltimateBuzzMode(meta.id));
   const [sprintTeamDialogOpen, setSprintTeamDialogOpen] = useState(false);
+  const sprintTeamDialogOpenRef = useRef(false);
   const resolvedOceanMode = oceanStageConfig?.mode ?? null;
   const oceanModeLabel = useMemo(
     () => getOceanPlayModeLabel(resolvedOceanMode),
@@ -388,7 +417,7 @@ function QuizPageContent() {
     ultimateBuzzMode
   );
   const shouldHandleSubmitCommand =
-    isQaMode || isLastStandMode || ultimateBuzzMode;
+    isQaMode || isQaChallengeMode || isLastStandMode || ultimateBuzzMode;
   const commandMessage = useMqttSubscription(
     MQTT_TOPICS.command,
     shouldHandleSubmitCommand
@@ -456,6 +485,7 @@ function QuizPageContent() {
   const { stats: persistenceStats, enqueueJob, retryFailures, removeFailedJob } = useQuizPersistenceQueue({
     submitAnswerChoice,
     submitJudgeResult,
+    incrementScoreFieldByIdentifier,
   });
 
   const clearUltimatePkThrottle = useCallback(() => {
@@ -487,8 +517,22 @@ function QuizPageContent() {
   useEffect(() => {
     return () => {
       clearUltimatePkThrottle();
+      if (typeof window === "undefined") {
+        closeSprintTeamSelectionDialog();
+        return;
+      }
+      window.setTimeout(() => {
+        if (window.location.pathname !== "/quiz") {
+          closeSprintTeamSelectionDialog();
+        }
+      }, 0);
     };
   }, [clearUltimatePkThrottle]);
+
+  useEffect(() => {
+    if (isBuzzerSprintMode) return;
+    closeSprintTeamSelectionDialog();
+  }, [isBuzzerSprintMode]);
 
   useEffect(() => {
     if (!isUltimatePkMode) {
@@ -634,7 +678,8 @@ function QuizPageContent() {
     [currentStage?.stageId, setSprintTeamId, setSprintTeamLocked, setSprintTeamStageId]
   );
   const openSprintTeamDialog = useCallback(async () => {
-    if (!isBuzzerSprintMode || sprintTeamDialogOpen) return;
+    if (!isBuzzerSprintMode || sprintTeamDialogOpenRef.current) return;
+    sprintTeamDialogOpenRef.current = true;
     setSprintTeamDialogOpen(true);
     try {
       const selectedTeamId = await promptSprintTeamSelection();
@@ -642,9 +687,10 @@ function QuizPageContent() {
         applySprintTeamSelection(selectedTeamId);
       }
     } finally {
+      sprintTeamDialogOpenRef.current = false;
       setSprintTeamDialogOpen(false);
     }
-  }, [applySprintTeamSelection, isBuzzerSprintMode, sprintTeamDialogOpen]);
+  }, [applySprintTeamSelection, isBuzzerSprintMode]);
   const handleSprintTeamSwitch = useCallback(() => {
     if (!sprintTeamSelectionAvailable) return;
     void openSprintTeamDialog();
@@ -770,6 +816,70 @@ function QuizPageContent() {
     () => findNormalizedQuestion(question, normalizedQuestions),
     [question, normalizedQuestions]
   );
+  const challengeConfigError = useMemo(() => {
+    if (!isQaChallengeMode || questionLoadStatus !== "success") {
+      return undefined;
+    }
+    return validateQaChallengeQuestions(normalizedQuestions);
+  }, [isQaChallengeMode, normalizedQuestions, questionLoadStatus]);
+  const challengeOwnerId = useMemo(
+    () =>
+      isQaChallengeMode
+        ? resolveChallengeOwner(normalizedQuestion ?? undefined)
+        : undefined,
+    [isQaChallengeMode, normalizedQuestion]
+  );
+  const challengeTargetId = useMemo(
+    () =>
+      isQaChallengeMode
+        ? resolveChallengeTarget(normalizedQuestion ?? undefined)
+        : undefined,
+    [isQaChallengeMode, normalizedQuestion]
+  );
+  const usedChallengeTargets = useMemo(
+    () => (isQaChallengeMode ? collectUsedChallengeTargets(normalizedQuestions) : new Set<string>()),
+    [isQaChallengeMode, normalizedQuestions]
+  );
+  const challengeOwnerLabel = useMemo(
+    () =>
+      isQaChallengeMode
+        ? resolveChallengeDisplayName(challengeOwnerId, teamProfiles)
+        : null,
+    [challengeOwnerId, isQaChallengeMode, teamProfiles]
+  );
+  const challengeTargetLabel = useMemo(
+    () =>
+      isQaChallengeMode
+        ? resolveChallengeDisplayName(challengeTargetId, teamProfiles)
+        : null,
+    [challengeTargetId, isQaChallengeMode, teamProfiles]
+  );
+  const challengeOptions = useMemo(
+    () =>
+      isQaChallengeMode
+        ? buildChallengeSelectionOptions({
+            challengeOwnerId,
+            teamProfiles,
+            usedChallengeTargets,
+          })
+        : [],
+    [challengeOwnerId, isQaChallengeMode, teamProfiles, usedChallengeTargets]
+  );
+  const challengeScoreField = useMemo(
+    () => resolveChallengeScoreField(currentStage?.rawFields),
+    [currentStage?.rawFields]
+  );
+  const isChallengeOwner = Boolean(
+    isQaChallengeMode && question && challengeOwnerId && user?.id === challengeOwnerId
+  );
+  const isChallengeTarget = Boolean(
+    isQaChallengeMode && question && challengeTargetId && user?.id === challengeTargetId
+  );
+  const isChallengeBackupQuestion = Boolean(isQaChallengeMode && question && !challengeOwnerId);
+  const effectiveAnsweringEnabled =
+    isQaChallengeMode && question
+      ? Boolean(state.answeringEnabled && challengeTargetId && isChallengeTarget)
+      : state.answeringEnabled;
   const questionImageEntries = useMemo(
     () => resolveQuestionImageEntries(question, normalizedQuestion),
     [question, normalizedQuestion]
@@ -1686,6 +1796,111 @@ function QuizPageContent() {
     void fetchOceanStats();
   }, [fetchOceanStats]);
 
+  const handleChallengeTargetSelect = useCallback(
+    (targetUserId: string) => {
+      if (!isQaChallengeMode || !question || !questionId) return;
+      if (!challengeOwnerId || user?.id !== challengeOwnerId) {
+        Toast.warn("当前题不属于本设备，无法选择作答队伍");
+        return;
+      }
+      if (!normalizedQuestion?.recordId || !currentStage?.questionSheetId) {
+        Toast.error("当前题缺少题库记录，无法保存作答队伍");
+        return;
+      }
+      if (challengeTargetId) {
+        Toast.warn("当前题已锁定作答队伍");
+        return;
+      }
+      if (usedChallengeTargets.has(targetUserId)) {
+        Toast.warn(
+          targetUserId === challengeOwnerId
+            ? "本队已被其他题锁定，当前不可选择"
+            : "该队伍已被其他题锁定，当前不可选择"
+        );
+        return;
+      }
+      if (!mqttService.isConnected()) {
+        Toast.error("MQTT 未连接，无法发送作答指令");
+        return;
+      }
+
+      const targetLabel =
+        challengeOptions.find((option) => option.value === targetUserId)?.label ??
+        targetUserId;
+      const command = buildChallengeCommand(challengeOwnerId, targetUserId);
+      const questionSheetId = currentStage.questionSheetId;
+      const stageId = currentStage.stageId;
+      const questionRecordId = String(normalizedQuestion.recordId);
+      const stageLabel =
+        currentStage?.displayName?.trim() ||
+        currentStage?.name?.trim() ||
+        meta.name;
+
+      Dialog.confirm({
+        title: "确认作答队伍？",
+        children: `当前题将由 ${targetLabel} 作答，确认后不可修改。`,
+        titleAlign: "center",
+        contentAlign: "center",
+        okText: "确认",
+        cancelText: "取消",
+        onOk: () => {
+          try {
+            mqttService.publish(MQTT_TOPICS.command, command, { qos: 1 });
+            setQuestionFieldValue(questionId, "challengeTarget", targetUserId);
+            enqueueJob({
+              id: `challenge-target:${stageId}:${questionId}`,
+              label: `${stageLabel} · 锁定作答队伍`,
+              createdAt: Date.now(),
+              attempts: 0,
+              details: {
+                stageLabel,
+                questionLabel: questionOrdinal > 0 ? `第 ${questionOrdinal} 题` : undefined,
+                answerLabel: targetLabel,
+              },
+              tasks: [
+                {
+                  type: "answer-choice",
+                  params: {
+                    datasheetId: questionSheetId,
+                    recordId: questionRecordId,
+                    userId: challengeOwnerId,
+                    fieldKey: "challengeTarget",
+                    answer: targetUserId,
+                  },
+                },
+              ],
+            });
+            if (targetUserId !== challengeOwnerId) {
+              Toast.success(`已锁定作答队伍：${targetLabel}`);
+            }
+          } catch (error) {
+            console.error("发送作答指令失败", error);
+            Toast.error("作答队伍指令发送失败");
+          }
+        },
+      });
+    },
+    [
+      challengeOptions,
+      challengeOwnerId,
+      challengeTargetId,
+      currentStage?.questionSheetId,
+      currentStage?.displayName,
+      currentStage?.name,
+      currentStage?.stageId,
+      enqueueJob,
+      isQaChallengeMode,
+      meta.name,
+      normalizedQuestion?.recordId,
+      question,
+      questionId,
+      questionOrdinal,
+      setQuestionFieldValue,
+      usedChallengeTargets,
+      user?.id,
+    ]
+  );
+
   const buzzerStatusLabel = useMemo(() => {
     if (!meta.features.requiresBuzzer) return null;
     if (!ultimateBuzzMode) {
@@ -1702,6 +1917,8 @@ function QuizPageContent() {
         return "等待对手";
       case "answer":
         return "本队作答中";
+      case "submitted":
+        return "已提交";
       default:
         return state.awaitingHost ? "未抢答" : "等待裁决";
     }
@@ -1726,15 +1943,15 @@ function QuizPageContent() {
 
   const handleWordbankBlankClick = useCallback(
     (index: number) => {
-      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
+      if (!effectiveAnsweringEnabled || isCommandSubmissionLocked) return;
       setWordbankActiveIndex(index);
     },
-    [isCommandSubmissionLocked, state.answeringEnabled]
+    [effectiveAnsweringEnabled, isCommandSubmissionLocked]
   );
 
   const handleWordbankClear = useCallback(
     (index: number) => {
-      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
+      if (!effectiveAnsweringEnabled || isCommandSubmissionLocked) return;
       const next = [...wordbankValues];
       if (!next[index]) {
         setWordbankActiveIndex(index);
@@ -1744,12 +1961,12 @@ function QuizPageContent() {
       setSelected([...next]);
       setWordbankActiveIndex(index);
     },
-    [isCommandSubmissionLocked, state.answeringEnabled, wordbankValues]
+    [effectiveAnsweringEnabled, isCommandSubmissionLocked, wordbankValues]
   );
 
   const handleWordbankSelectOption = useCallback(
     (optionValue: string, isUsed?: boolean) => {
-      if (!state.answeringEnabled || isCommandSubmissionLocked || !wordbankTemplate) return;
+      if (!effectiveAnsweringEnabled || isCommandSubmissionLocked || !wordbankTemplate) return;
       if (isUsed) {
         return;
       }
@@ -1791,7 +2008,7 @@ function QuizPageContent() {
     },
     [
       isCommandSubmissionLocked,
-      state.answeringEnabled,
+      effectiveAnsweringEnabled,
       wordbankOptions,
       wordbankTemplate,
       wordbankValues,
@@ -1801,7 +2018,7 @@ function QuizPageContent() {
 
   const handlePointSelectOption = useCallback(
     (optionValue: string) => {
-      if (!state.answeringEnabled || isCommandSubmissionLocked || !isPointSelectQuestion) {
+      if (!effectiveAnsweringEnabled || isCommandSubmissionLocked || !isPointSelectQuestion) {
         return;
       }
       const canonical = canonicalizeWordbankValue(optionValue, pointSelectOptions);
@@ -1822,27 +2039,27 @@ function QuizPageContent() {
         return [...normalized, canonical];
       });
     },
-    [isCommandSubmissionLocked, isPointSelectQuestion, pointSelectOptions, state.answeringEnabled]
+    [effectiveAnsweringEnabled, isCommandSubmissionLocked, isPointSelectQuestion, pointSelectOptions]
   );
 
   const handlePointSelectClear = useCallback(() => {
-    if (!state.answeringEnabled || isCommandSubmissionLocked || !isPointSelectQuestion) {
+    if (!effectiveAnsweringEnabled || isCommandSubmissionLocked || !isPointSelectQuestion) {
       return;
     }
     setSelected([]);
-  }, [isCommandSubmissionLocked, isPointSelectQuestion, state.answeringEnabled]);
+  }, [effectiveAnsweringEnabled, isCommandSubmissionLocked, isPointSelectQuestion]);
 
   const handleMatchingLeftClick = useCallback(
     (leftId: string) => {
-      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
+      if (!effectiveAnsweringEnabled || isCommandSubmissionLocked) return;
       setActiveMatchingLeft((prev) => (prev === leftId ? null : leftId));
     },
-    [isCommandSubmissionLocked, state.answeringEnabled]
+    [effectiveAnsweringEnabled, isCommandSubmissionLocked]
   );
 
   const handleMatchingRightClick = useCallback(
     (rightId: string) => {
-      if (!state.answeringEnabled || isCommandSubmissionLocked) return;
+      if (!effectiveAnsweringEnabled || isCommandSubmissionLocked) return;
 
       if (activeMatchingLeft) {
         setMatchingPairs((prev) => {
@@ -1877,17 +2094,17 @@ function QuizPageContent() {
       isCommandSubmissionLocked,
       matchingConfig?.left,
       matchingSelectionMap,
-      state.answeringEnabled,
+      effectiveAnsweringEnabled,
     ]
   );
 
   const handleClearMatchingPairs = useCallback(() => {
-    if (!state.answeringEnabled || isCommandSubmissionLocked || matchingPairs.length === 0) {
+    if (!effectiveAnsweringEnabled || isCommandSubmissionLocked || matchingPairs.length === 0) {
       return;
     }
     setMatchingPairs([]);
     setActiveMatchingLeft(null);
-  }, [isCommandSubmissionLocked, matchingPairs, state.answeringEnabled]);
+  }, [effectiveAnsweringEnabled, isCommandSubmissionLocked, matchingPairs]);
 
   const handleOpenBoard = useCallback(() => {
     if (isBoardOpen || boardSubmitted || isCommandSubmissionLocked) return;
@@ -1968,6 +2185,79 @@ function QuizPageContent() {
     []
   );
 
+  const handleChallengeSubmissionResolved = useCallback(
+    ({
+      result,
+      normalizedQuestion: submittedQuestion,
+      questionIndex,
+    }: {
+      result: { correct?: boolean } | undefined;
+      normalizedQuestion?: NormalizedQuestion;
+      questionIndex: number;
+    }) => {
+      if (!isQaChallengeMode || result?.correct === undefined) {
+        return;
+      }
+      if (!currentStage?.scoreSheetId) {
+        Toast.error("当前环节缺少分数表配置，无法累计挑战积分");
+        return;
+      }
+
+      const owner = resolveChallengeOwner(submittedQuestion ?? undefined);
+      const target = resolveChallengeTarget(submittedQuestion ?? undefined);
+      const beneficiaryId = resolveChallengeScoreBeneficiary({
+        ownerId: owner,
+        targetId: target,
+        isCorrect: result.correct,
+      });
+      if (!beneficiaryId) {
+        return;
+      }
+
+      const beneficiaryLabel = resolveChallengeDisplayName(beneficiaryId, teamProfiles) ?? beneficiaryId;
+      const stageLabel =
+        currentStage.displayName?.trim() ||
+        currentStage.name?.trim() ||
+        meta.name;
+      const questionLabel =
+        questionIndex >= 0 ? `第 ${questionIndex + 1} 题` : undefined;
+
+      enqueueJob({
+        id: `challenge-score:${currentStage.stageId}:${submittedQuestion?.id ?? questionIndex}`,
+        label: `${stageLabel} · 挑战积分`,
+        createdAt: Date.now(),
+        attempts: 0,
+        details: {
+          stageLabel,
+          questionLabel,
+          answerLabel: `${beneficiaryLabel} +20`,
+        },
+        tasks: [
+          {
+            type: "score-increment",
+            params: {
+              datasheetId: currentStage.scoreSheetId,
+              identifier: beneficiaryId,
+              fieldKey: challengeScoreField,
+              delta: 20,
+            },
+          },
+        ],
+      });
+    },
+    [
+      challengeScoreField,
+      currentStage?.displayName,
+      currentStage?.name,
+      currentStage?.scoreSheetId,
+      currentStage?.stageId,
+      enqueueJob,
+      isQaChallengeMode,
+      meta.name,
+      teamProfiles,
+    ]
+  );
+
   const { isSubmitting, submit: handleSubmit } = useQuizSubmission({
     question,
     selected,
@@ -1975,7 +2265,7 @@ function QuizPageContent() {
     setMatchingPairs,
     controls,
     runtimeState: {
-      answeringEnabled: state.answeringEnabled,
+      answeringEnabled: effectiveAnsweringEnabled,
       questionIndex: state.questionIndex,
       timeRemaining: state.timeRemaining,
     },
@@ -1991,6 +2281,7 @@ function QuizPageContent() {
     isGroupedLastStand,
     shouldSyncLastStandStatus,
     enqueueJob,
+    onSubmissionResolved: handleChallengeSubmissionResolved,
     onCommandSubmissionStateChange: ({
       locked,
       overlayVisible,
@@ -2110,6 +2401,7 @@ function QuizPageContent() {
     const rawPayload = commandMessage.payload.trim();
     const normalizedCommand = rawPayload.toLowerCase();
     const isNumericCommand = /^\d+$/.test(rawPayload);
+    const challengeCommand = isQaChallengeMode ? parseChallengeCommand(rawPayload) : null;
 
     if (isNumericCommand) {
       lastCommandHandledRef.current = commandMessage.timestamp;
@@ -2122,6 +2414,20 @@ function QuizPageContent() {
         setLockedWinnerId(null);
         lastBuzzResultRef.current = { questionId: null, timestamp: 0 };
       }
+      return;
+    }
+
+    if (challengeCommand) {
+      if (!questionId || !challengeOwnerId || challengeCommand.owner !== challengeOwnerId) {
+        return;
+      }
+      lastCommandHandledRef.current = commandMessage.timestamp;
+      if (!challengeTargetId) {
+        setQuestionFieldValue(questionId, "challengeTarget", challengeCommand.challengeTarget);
+      }
+      setCommandSubmissionLocked(false);
+      setCommandSubmissionOverlayVisible(false);
+      setAnswerRevealActive(false);
       return;
     }
 
@@ -2187,9 +2493,14 @@ function QuizPageContent() {
     handleRetractCommand,
     handleSubmit,
     isBoardUploading,
+    isQaChallengeMode,
     question,
+    questionId,
     resetUltimateRoundControl,
     shouldHandleSubmitCommand,
+    challengeOwnerId,
+    challengeTargetId,
+    setQuestionFieldValue,
     ultimateBuzzMode,
   ]);
 
@@ -2509,6 +2820,110 @@ function QuizPageContent() {
       );
     }
 
+    if (isQaChallengeMode && challengeConfigError) {
+      return (
+        <div className={styles.questionLoading}>
+          <div className={`${styles.statusBadge} ${styles.statusBadgeError}`}>
+            <ErrorBadgeIcon className={styles.statusIcon} />
+          </div>
+          <div className={styles.loadingTexts}>
+            <p className={styles.loadingPrimary}>挑战题配置异常</p>
+            <p className={styles.loadingSecondary}>请举手示意，告知主持人重新进入环节</p>
+            <p className={styles.loadingMeta}>{challengeConfigError}</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (isQaChallengeMode && question) {
+      if (isChallengeBackupQuestion) {
+        return (
+          <div className={styles.questionLoading}>
+            <div className={`${styles.statusBadge} ${styles.statusBadgePending}`}>
+              <span className={styles.loadingSpinner} aria-hidden="true" />
+            </div>
+            <div className={styles.loadingTexts}>
+              <p className={styles.loadingPrimary}>当前为备用题</p>
+              <p className={styles.loadingSecondary}>该题未配置所属队伍，暂不进入挑战作答流程</p>
+              <p className={styles.loadingMeta}>如需启用，请先在题库表中补齐 owner 字段。</p>
+            </div>
+          </div>
+        );
+      }
+
+      if (!challengeTargetId) {
+        if (isChallengeOwner) {
+          return (
+            <div className={styles.questionLoading}>
+              <div className={styles.loadingTexts}>
+                <p className={styles.loadingPrimary}>请选择作答队伍</p>
+                <p className={styles.loadingSecondary}>
+                  当前题所属队伍：{challengeOwnerLabel ?? challengeOwnerId ?? "未配置"}
+                </p>
+                <p className={styles.loadingMeta}>确认后将立即开启倒计时</p>
+              </div>
+              <div className={styles.challengeTargetGrid}>
+                {challengeOptions.map((option) => (
+                  <Button
+                    key={option.value}
+                    type={option.disabled ? "ghost" : "primary"}
+                    size="large"
+                    className={`${styles.challengeTargetButton} ${
+                      option.status === "used"
+                        ? styles.challengeTargetButtonUsed
+                        : option.status === "self"
+                          ? styles.challengeTargetButtonSelf
+                          : styles.challengeTargetButtonAvailable
+                    }`}
+                    disabled={option.disabled}
+                    onClick={() => handleChallengeTargetSelect(option.value)}
+                  >
+                    <span className={styles.challengeTargetButtonText}>
+                      <span className={styles.challengeTargetButtonName}>{option.label}</span>
+                      <span className={styles.challengeTargetButtonMeta}>{option.metaLabel}</span>
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div className={styles.questionLoading}>
+            <div className={styles.loadingTexts}>
+              <p className={styles.loadingPrimary}>等待专属队伍选择作答队伍</p>
+              <p className={styles.loadingSecondary}>
+                当前题所属队伍：{challengeOwnerLabel ?? challengeOwnerId ?? "未配置"}
+              </p>
+              <p className={styles.loadingMeta}>被选中的队伍会立即进入作答界面</p>
+            </div>
+          </div>
+        );
+      }
+
+      if (!isChallengeTarget) {
+        return (
+          <div className={styles.questionLoading}>
+            <div className={`${styles.statusBadge} ${styles.statusBadgeSuccess}`}>
+              <SuccessCheckIcon className={styles.statusIcon} />
+            </div>
+            <div className={styles.loadingTexts}>
+              <p className={styles.loadingPrimary}>
+                {isChallengeOwner ? "已锁定作答队伍" : "等待作答队伍作答"}
+              </p>
+              <p className={styles.loadingSecondary}>
+                当前题所属队伍：{challengeOwnerLabel ?? challengeOwnerId ?? "未配置"}
+              </p>
+              <p className={styles.loadingMeta}>
+                当前作答队伍：{challengeTargetLabel ?? challengeTargetId ?? "未锁定"}
+              </p>
+            </div>
+          </div>
+        );
+      }
+    }
+
     if (ultimateBuzzMode) {
       if (!question && ultimateStage === "waiting") {
         return (
@@ -2576,10 +2991,7 @@ function QuizPageContent() {
         );
       }
 
-      if (ultimateStage !== "answer") {
-        if (isCommandSubmissionLocked) {
-          return <CommandSubmissionResult />;
-        }
+      if (ultimateStage !== "answer" && ultimateStage !== "submitted") {
         return (
           <div className={styles.ultimateWrapper}>
             {sprintTeamBadge}
@@ -2633,7 +3045,7 @@ function QuizPageContent() {
                 question,
                 selected,
                 isAnswerRevealActive,
-                answeringEnabled: state.answeringEnabled,
+                answeringEnabled: effectiveAnsweringEnabled,
                 isCommandSubmissionLocked,
                 activeMatchingLeft,
                 matchingSelectionMap,
@@ -2666,7 +3078,7 @@ function QuizPageContent() {
                 question,
                 selected,
                 setSelected,
-                answeringEnabled: state.answeringEnabled,
+                answeringEnabled: effectiveAnsweringEnabled,
                 isCommandSubmissionLocked,
                 isAnswerRevealActive,
               }
@@ -2796,7 +3208,7 @@ function QuizPageContent() {
                 onClick={() => void handleSubmit()}
                 loading={isSubmitting}
                 disabled={
-                  !hasQuestion || !state.answeringEnabled || isSubmitting || isCommandSubmissionLocked
+                  !hasQuestion || !effectiveAnsweringEnabled || isSubmitting || isCommandSubmissionLocked
                 }
               >
                 {submitLabel}
@@ -2818,7 +3230,7 @@ function QuizPageContent() {
           onUploadSuccess={handleBoardUploadSuccess}
           onPathsChange={handleBoardPathsChange}
           initialPaths={cachedPaths}
-          disabled={!state.answeringEnabled || isCommandSubmissionLocked}
+          disabled={!effectiveAnsweringEnabled || isCommandSubmissionLocked}
         />
       </ArcoClient>
     </div>

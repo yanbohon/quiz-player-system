@@ -81,6 +81,12 @@ export interface UseQuizSubmissionOptions {
   isGroupedLastStand: boolean;
   shouldSyncLastStandStatus: boolean;
   enqueueJob: (job: PersistenceJob) => void;
+  onSubmissionResolved?: (params: {
+    result: QuizSubmissionResult | undefined;
+    currentQuestion: QuizQuestion;
+    normalizedQuestion?: NormalizedQuestion;
+    questionIndex: number;
+  }) => void;
   onCommandSubmissionStateChange: (params: {
     locked: boolean;
     overlayVisible: boolean;
@@ -152,6 +158,7 @@ export function useQuizSubmission({
   isGroupedLastStand,
   shouldSyncLastStandStatus,
   enqueueJob,
+  onSubmissionResolved,
   onCommandSubmissionStateChange,
   onOceanStatsPatch,
 }: UseQuizSubmissionOptions): UseQuizSubmissionResult {
@@ -345,6 +352,7 @@ export function useQuizSubmission({
       setSubmitting(true);
       try {
         await enqueueSubmission(async () => {
+          const currentQuestionId = resolveQuestionId(currentQuestion);
           const submissionResult = await controls.submitAnswer(submissionValue, {
             requestId,
             timeoutMs: SUBMISSION_TIMEOUT_MS,
@@ -358,7 +366,7 @@ export function useQuizSubmission({
             isStandardQuestion(currentQuestion)
           ) {
             const normalizedQuestion = normalizedQuestions.find(
-              (item) => item.id === currentQuestion.id
+              (item) => item.id === currentQuestionId
             );
             const questionRecordId = normalizedQuestion?.recordId
               ? String(normalizedQuestion.recordId)
@@ -452,6 +460,15 @@ export function useQuizSubmission({
               });
             }
           }
+
+          onSubmissionResolved?.({
+            result: submissionResult,
+            currentQuestion,
+            normalizedQuestion: normalizedQuestions.find(
+              (item) => item.id === currentQuestionId
+            ),
+            questionIndex: currentQuestionIndex,
+          });
 
           const showCorrectness = modeId === "speed-run" || modeId === "ocean-adventure";
           const notifyStyle = {
@@ -559,6 +576,7 @@ export function useQuizSubmission({
       notifyOffset,
       onCommandSubmissionStateChange,
       onOceanStatsPatch,
+      onSubmissionResolved,
       question,
       runtimeState.answeringEnabled,
       runtimeState.questionIndex,

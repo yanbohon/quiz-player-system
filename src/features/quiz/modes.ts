@@ -19,6 +19,24 @@ export const CONTEST_MODES: Record<ContestModeMeta["id"], ContestModeMeta> = {
       localQuestionCache: false,
     },
   },
+  "qa-challenge": {
+    id: "qa-challenge",
+    name: "有问必答挑战题",
+    description:
+      "题目先由专属队伍选择作答队伍，可选择本队直接作答或挑战其他队伍，再由被选队伍在主持人指令下完成作答。",
+    channel: "mqtt",
+    questionFlow: "push",
+    answerFlow: "immediate",
+    questionFormat: "standard",
+    features: {
+      hasHp: false,
+      requiresBuzzer: false,
+      allowsDelegation: false,
+      supportsTimer: false,
+      autoAdvance: false,
+      localQuestionCache: false,
+    },
+  },
   "qa-20": {
     id: "qa-20",
     name: "有问必答(20)",

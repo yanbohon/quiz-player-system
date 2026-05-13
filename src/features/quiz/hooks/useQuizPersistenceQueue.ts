@@ -36,7 +36,20 @@ export type JudgeResultPersistenceTask = {
   };
 };
 
-export type PersistenceTask = AnswerChoicePersistenceTask | JudgeResultPersistenceTask;
+export type ScoreIncrementPersistenceTask = {
+  type: "score-increment";
+  params: {
+    datasheetId: string;
+    identifier: string;
+    fieldKey: string;
+    delta: number;
+  };
+};
+
+export type PersistenceTask =
+  | AnswerChoicePersistenceTask
+  | JudgeResultPersistenceTask
+  | ScoreIncrementPersistenceTask;
 
 export type PersistenceJobDetails = {
   stageLabel?: string;
@@ -82,6 +95,9 @@ export interface UseQuizPersistenceQueueDependencies {
     params: AnswerChoicePersistenceTask["params"]
   ) => Promise<void>;
   submitJudgeResult: (params: JudgeResultPersistenceTask["params"]) => Promise<void>;
+  incrementScoreFieldByIdentifier: (
+    params: ScoreIncrementPersistenceTask["params"]
+  ) => Promise<number>;
 }
 
 export interface UseQuizPersistenceQueueResult {
@@ -153,7 +169,7 @@ export function sanitizePersistenceTask(source: unknown): PersistenceTask | null
   if (!isPlainRecord(source)) return null;
   const type = source["type"];
   const rawParams = source["params"];
-  if (type !== "answer-choice" && type !== "judge-result") {
+  if (type !== "answer-choice" && type !== "judge-result" && type !== "score-increment") {
     return null;
   }
   if (!isPlainRecord(rawParams)) {
@@ -182,6 +198,31 @@ export function sanitizePersistenceTask(source: unknown): PersistenceTask | null
         userId,
         answer,
         fieldKey: typeof fieldKey === "string" && fieldKey.trim() ? fieldKey : undefined,
+      },
+    };
+  }
+
+  if (type === "score-increment") {
+    const datasheetId = rawParams["datasheetId"];
+    const identifier = rawParams["identifier"];
+    const fieldKey = rawParams["fieldKey"];
+    const delta = rawParams["delta"];
+    if (
+      typeof datasheetId !== "string" ||
+      typeof identifier !== "string" ||
+      typeof fieldKey !== "string" ||
+      typeof delta !== "number" ||
+      !Number.isFinite(delta)
+    ) {
+      return null;
+    }
+    return {
+      type,
+      params: {
+        datasheetId,
+        identifier,
+        fieldKey,
+        delta,
       },
     };
   }
@@ -330,7 +371,7 @@ export function readPersistedPersistenceState(): PersistedPersistenceState {
 export function useQuizPersistenceQueue(
   deps: UseQuizPersistenceQueueDependencies
 ): UseQuizPersistenceQueueResult {
-  const { submitAnswerChoice, submitJudgeResult } = deps;
+  const { submitAnswerChoice, submitJudgeResult, incrementScoreFieldByIdentifier } = deps;
   const [stats, setStats] = useState<PersistenceQueueSnapshot>({
     pending: 0,
     failed: 0,
@@ -412,19 +453,34 @@ export function useQuizPersistenceQueue(
           continue;
         }
 
+        if (task.type === "judge-result") {
+          await withTimeout(
+            submitJudgeResult(task.params),
+            PERSISTENCE_TIMEOUT_MS,
+            () =>
+              new QuizApiError(
+                "timeout",
+                "成绩结果同步超时",
+                "网络恢复后会自动重试"
+              )
+          );
+          continue;
+        }
+
         await withTimeout(
-          submitJudgeResult(task.params),
+          incrementScoreFieldByIdentifier(task.params),
           PERSISTENCE_TIMEOUT_MS,
           () =>
             new QuizApiError(
               "timeout",
-              "成绩结果同步超时",
+              "挑战积分同步超时",
               "网络恢复后会自动重试"
             )
         );
+        continue;
       }
     },
-    [submitAnswerChoice, submitJudgeResult]
+    [incrementScoreFieldByIdentifier, submitAnswerChoice, submitJudgeResult]
   );
 
   const processPersistenceQueue = useCallback(() => {

@@ -198,11 +198,13 @@ describe("useQuizPersistenceQueue", () => {
 
     const submitAnswerChoice = vi.fn().mockResolvedValue(undefined);
     const submitJudgeResult = vi.fn().mockResolvedValue(undefined);
+    const incrementScoreFieldByIdentifier = vi.fn().mockResolvedValue(0);
 
     const { result } = renderHook(() =>
       useQuizPersistenceQueue({
         submitAnswerChoice,
         submitJudgeResult,
+        incrementScoreFieldByIdentifier,
       })
     );
 
@@ -233,11 +235,13 @@ describe("useQuizPersistenceQueue", () => {
       )
       .mockResolvedValueOnce(undefined);
     const submitJudgeResult = vi.fn().mockResolvedValue(undefined);
+    const incrementScoreFieldByIdentifier = vi.fn().mockResolvedValue(0);
 
     const { result } = renderHook(() =>
       useQuizPersistenceQueue({
         submitAnswerChoice,
         submitJudgeResult,
+        incrementScoreFieldByIdentifier,
       })
     );
 
@@ -271,11 +275,13 @@ describe("useQuizPersistenceQueue", () => {
         new QuizApiError("business", "sync failed", "try again later")
       );
     const submitJudgeResult = vi.fn().mockResolvedValue(undefined);
+    const incrementScoreFieldByIdentifier = vi.fn().mockResolvedValue(0);
 
     const { result } = renderHook(() =>
       useQuizPersistenceQueue({
         submitAnswerChoice,
         submitJudgeResult,
+        incrementScoreFieldByIdentifier,
       })
     );
 
@@ -300,5 +306,50 @@ describe("useQuizPersistenceQueue", () => {
       expect(result.current.stats.failed).toBe(0);
     });
     expect(window.localStorage.getItem(PERSISTENCE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("processes score increment jobs", async () => {
+    const submitAnswerChoice = vi.fn().mockResolvedValue(undefined);
+    const submitJudgeResult = vi.fn().mockResolvedValue(undefined);
+    const incrementScoreFieldByIdentifier = vi.fn().mockResolvedValue(40);
+
+    const { result } = renderHook(() =>
+      useQuizPersistenceQueue({
+        submitAnswerChoice,
+        submitJudgeResult,
+        incrementScoreFieldByIdentifier,
+      })
+    );
+
+    act(() => {
+      result.current.enqueueJob(
+        createJob({
+          id: "score-job",
+          label: "sync challenge score",
+          tasks: [
+            {
+              type: "score-increment",
+              params: {
+                datasheetId: "score-sheet",
+                identifier: "1001",
+                fieldKey: "challengeScore",
+                delta: 20,
+              },
+            },
+          ],
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(incrementScoreFieldByIdentifier).toHaveBeenCalledWith({
+        datasheetId: "score-sheet",
+        identifier: "1001",
+        fieldKey: "challengeScore",
+        delta: 20,
+      });
+    });
+    expect(submitAnswerChoice).not.toHaveBeenCalled();
+    expect(submitJudgeResult).not.toHaveBeenCalled();
   });
 });
