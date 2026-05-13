@@ -10,7 +10,8 @@ import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
 import { useSessionGuard } from "@/hooks/useSessionGuard";
 import { useMqttLeader } from "@/hooks/useMqttLeader";
-import { E2EBridge } from "@/app/E2EBridge";
+import { E2EBridge } from "@/providers/E2EBridge";
+import { isPublicEnvEnabled } from "@/config/env";
 
 function ActiveControlCommands({
   clientId,
@@ -125,8 +126,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
-  const showQueryDevtools =
-    process.env.NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS === "true";
+  const showQueryDevtools = isPublicEnvEnabled("ENABLE_QUERY_DEVTOOLS");
 
   return (
     <QueryClientProvider client={queryClient}>

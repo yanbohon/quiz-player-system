@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen } from "@/test/render";
 import { QuizSyncQueuePanel, type QuizSyncQueuePanelProps } from "./QuizSyncQueuePanel";
 
-const dialogConfirmMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  dialogConfirm: vi.fn(),
+}));
 
 vi.mock("@arco-design/mobile-react", () => ({
   Button: ({
@@ -28,7 +30,7 @@ vi.mock("@arco-design/mobile-react", () => ({
 
 vi.mock("@/lib/arco", () => ({
   Dialog: {
-    confirm: dialogConfirmMock,
+    confirm: mocks.dialogConfirm,
   },
 }));
 
@@ -65,7 +67,7 @@ function renderPanel(props: QuizSyncQueuePanelProps) {
 
 describe("QuizSyncQueuePanel", () => {
   it("renders queue counts and triggers detail and retry actions", async () => {
-    dialogConfirmMock.mockReset();
+    mocks.dialogConfirm.mockReset();
     const onToggleDetails = vi.fn();
     const onRetry = vi.fn();
     const { user } = renderPanel(
@@ -89,7 +91,7 @@ describe("QuizSyncQueuePanel", () => {
   });
 
   it("shows empty details and disables retry when there are no failed jobs", async () => {
-    dialogConfirmMock.mockReset();
+    mocks.dialogConfirm.mockReset();
     const onRetry = vi.fn();
     const { user } = renderPanel(
       createProps({
@@ -109,7 +111,7 @@ describe("QuizSyncQueuePanel", () => {
   });
 
   it("renders failed item details when expanded", () => {
-    dialogConfirmMock.mockReset();
+    mocks.dialogConfirm.mockReset();
     renderPanel(
       createProps({
         pending: 3,
@@ -154,7 +156,7 @@ describe("QuizSyncQueuePanel", () => {
   });
 
   it("confirms before deleting a failed item", async () => {
-    dialogConfirmMock.mockReset();
+    mocks.dialogConfirm.mockReset();
     const onDeleteFailedItem = vi.fn();
     const onRetry = vi.fn();
     const { user } = renderPanel(
@@ -167,8 +169,8 @@ describe("QuizSyncQueuePanel", () => {
 
     await user.click(screen.getByRole("button", { name: "删除" }));
 
-    expect(dialogConfirmMock).toHaveBeenCalledTimes(1);
-    const dialogConfig = dialogConfirmMock.mock.calls[0]?.[0] as {
+    expect(mocks.dialogConfirm).toHaveBeenCalledTimes(1);
+    const dialogConfig = mocks.dialogConfirm.mock.calls[0]?.[0] as {
       onOk?: () => void;
       title?: string;
       children?: string;

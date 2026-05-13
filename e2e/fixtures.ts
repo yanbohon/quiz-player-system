@@ -12,6 +12,7 @@ import {
 import {
   mockFusionDatasheet,
   mockGrabQuestionSequence,
+  mockOceanStageConfig,
   mockSubmitAnswerSequence,
 } from "./utils/mock-api";
 
@@ -20,6 +21,7 @@ type QuizSeed = Parameters<typeof setQuizState>[1];
 type AppSeed = Parameters<typeof setAppState>[1];
 type FusionDatasheetRecords = Parameters<typeof mockFusionDatasheet>[2];
 type GrabResponses = Parameters<typeof mockGrabQuestionSequence>[1];
+type OceanConfig = Parameters<typeof mockOceanStageConfig>[1];
 type SubmitResponses = Parameters<typeof mockSubmitAnswerSequence>[1];
 
 type QuizHarness = {
@@ -33,6 +35,7 @@ type QuizHarness = {
     records: FusionDatasheetRecords
   ) => Promise<void>;
   mockGrabQuestionSequence: (responses: GrabResponses) => Promise<void>;
+  mockOceanStageConfig: (config?: OceanConfig) => Promise<void>;
   mockSubmitAnswerSequence: (responses: SubmitResponses) => Promise<void>;
 };
 
@@ -61,6 +64,9 @@ export const test = base.extend<{ quizApp: QuizHarness }>({
       },
       async mockGrabQuestionSequence(responses) {
         await mockGrabQuestionSequence(page, responses);
+      },
+      async mockOceanStageConfig(config) {
+        await mockOceanStageConfig(page, config);
       },
       async mockSubmitAnswerSequence(responses) {
         await mockSubmitAnswerSequence(page, responses);

@@ -1,6 +1,6 @@
 # 答题系统 - 选手端
 
-基于 Next.js 15 的移动端选手客户端，覆盖登录、等待页、答题页、主持人 MQTT 指令联动，以及 Fusion / 题海接口对接。
+基于 Vite + React 的移动端选手客户端，覆盖登录、等待页、答题页、主持人 MQTT 指令联动，以及 Fusion / 题海接口对接。
 
 ## 当前能力
 
@@ -12,8 +12,9 @@
 
 ## 技术栈
 
-- Next.js 15
+- Vite
 - React 19
+- React Router
 - TypeScript
 - Zustand
 - MQTT.js
@@ -32,23 +33,25 @@ npm install
 2. 手动创建 `.env.local`
 
 ```env
-NEXT_PUBLIC_FUSION_API_BASE=https://your-fusion.example.com/fusion
-NEXT_PUBLIC_FUSION_API_TOKEN=your-token
-NEXT_PUBLIC_FUSION_SPACE_ID=your-space-id
-NEXT_PUBLIC_FUSION_EVENT_NODE_ID=your-event-node-id
+VITE_FUSION_API_BASE=https://your-fusion.example.com/fusion
+VITE_FUSION_API_TOKEN=your-token
+VITE_FUSION_SPACE_ID=your-space-id
+VITE_FUSION_EVENT_NODE_ID=your-event-node-id
 
-NEXT_PUBLIC_TIHAI_API_BASE=https://your-quiz-pool.example.com/api
+VITE_TIHAI_API_BASE=https://your-quiz-pool.example.com/api
 
-NEXT_PUBLIC_MQTT_ENABLED=true
-NEXT_PUBLIC_MQTT_URL=wss://your-broker.example.com:8084/mqtt
-NEXT_PUBLIC_MQTT_USERNAME=your-username
-NEXT_PUBLIC_MQTT_PASSWORD=your-password
-NEXT_PUBLIC_MQTT_TOPIC_COMMAND=cmd
-NEXT_PUBLIC_MQTT_TOPIC_CONTROL=quiz/control
-NEXT_PUBLIC_MQTT_TOPIC_RESULT=quiz/result
-NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
-NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX=state
+VITE_MQTT_ENABLED=true
+VITE_MQTT_URL=wss://your-broker.example.com:8084/mqtt
+VITE_MQTT_USERNAME=your-username
+VITE_MQTT_PASSWORD=your-password
+VITE_MQTT_TOPIC_COMMAND=cmd
+VITE_MQTT_TOPIC_CONTROL=quiz/control
+VITE_MQTT_TOPIC_RESULT=quiz/result
+VITE_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
+VITE_MQTT_TOPIC_STATE_PREFIX=state
 ```
+
+`NEXT_PUBLIC_*` 旧变量名在迁移阶段仍会作为回退读取。
 
 3. 启动开发环境
 
@@ -70,7 +73,7 @@ npm run dev
 npm run dev
 npm run build
 npm run start
-npm run lint
+npm run preview
 npm run type-check
 npm test
 npm run test:e2e
@@ -81,7 +84,9 @@ npm run test:e2e:broker
 
 ```text
 .
-├── src/app/                # 路由页与全局 Provider
+├── src/pages/              # SPA 路由页面
+├── src/providers/          # 全局 Provider 与 E2E 桥接
+├── src/app/                # 全局样式与保留的 CSS Modules
 ├── src/features/quiz/      # 赛制运行时、题型组件、答题逻辑
 ├── src/store/              # app-store / quiz-store
 ├── src/lib/                # API、MQTT、题目归一化、Arco 适配

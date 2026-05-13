@@ -17,6 +17,7 @@ import {
   mockFusionDatasheet,
   mockFusionEvents,
   mockGrabQuestionSequence,
+  mockOceanStageConfig,
 } from "./utils/mock-api";
 import {
   collectLiveMqttMessages,
@@ -736,9 +737,15 @@ test("real broker stage-start command activates a speed-run stage and routes to 
   await expect(page.getByText("请做好准备 比赛即将开始")).toBeVisible();
 });
 
-test("real broker pool-start command warns when ocean mode is not selected", async ({
+test("real broker pool-start command warns when team mode has no selected group", async ({
   page,
 }) => {
+  await mockOceanStageConfig(page, {
+    mode: "group",
+    questionCount: 12,
+    timeLimitSeconds: 600,
+  });
+
   await seedStores(page, {
     quiz: {
       selectedEvent: {
@@ -752,6 +759,15 @@ test("real broker pool-start command warns when ocean mode is not selected", asy
       waitingForStageStart: true,
       questionGateOpened: true,
       oceanRemainingCount: 12,
+      oceanStageConfigStatus: "success",
+      oceanStageConfig: {
+        mode: "group",
+        questionCount: 12,
+        timeLimitSeconds: 600,
+        loadedPresetName: "E2E 题包",
+        source: "preset",
+        updatedAt: "2026-05-13T00:00:00.000Z",
+      },
     },
   });
 
@@ -764,7 +780,7 @@ test("real broker pool-start command warns when ocean mode is not selected", asy
     payload: "pool-start",
   });
 
-  await expect(page.getByText("请先选择个人模式或团队模式")).toBeVisible();
+  await expect(page.getByText("请先选择红队或蓝队")).toBeVisible();
   await expect(page.getByText("题库准备就绪")).toBeVisible();
   await page.waitForURL("**/quiz?mode=ocean-adventure");
 });
@@ -772,6 +788,12 @@ test("real broker pool-start command warns when ocean mode is not selected", asy
 test("real broker pool-start command grabs the first ocean question after mode selection", async ({
   page,
 }) => {
+  await mockOceanStageConfig(page, {
+    mode: "solo",
+    questionCount: 12,
+    timeLimitSeconds: 600,
+  });
+
   await mockGrabQuestionSequence(page, [
     {
       success: true,
@@ -807,6 +829,15 @@ test("real broker pool-start command grabs the first ocean question after mode s
       waitingForStageStart: true,
       questionGateOpened: true,
       oceanRemainingCount: 12,
+      oceanStageConfigStatus: "success",
+      oceanStageConfig: {
+        mode: "solo",
+        questionCount: 12,
+        timeLimitSeconds: 600,
+        loadedPresetName: "E2E 题包",
+        source: "preset",
+        updatedAt: "2026-05-13T00:00:00.000Z",
+      },
     },
   });
 
@@ -815,7 +846,7 @@ test("real broker pool-start command grabs the first ocean question after mode s
   await waitForMqttConnection(page);
 
   await expect(page.getByText("题库准备就绪")).toBeVisible();
-  await expect(page.getByText("当前已选择个人模式，开始抢题后将自动锁定。")).toBeVisible();
+  await expect(page.getByText("当前环节为个人模式，主持人开始后将直接抢题。")).toBeVisible();
 
   await publishLiveMqttMessage({
     topic: BROKER_COMMAND_TOPIC,

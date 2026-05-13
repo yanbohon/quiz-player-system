@@ -1,6 +1,5 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -12,6 +11,7 @@ import { ApiError } from "@/lib/api/client";
 import { useMqtt } from "@/lib/mqtt/hooks";
 import { mqttService } from "@/lib/mqtt/client";
 import type { MqttConfig } from "@/lib/mqtt/client";
+import { useAppNavigate, useAppPathname, useAppSearchParams } from "@/lib/router";
 import { useAppStore } from "@/store/useAppStore";
 import { RANK_STAGE_MISSING_ERROR, useQuizStore } from "@/store/quizStore";
 import { getOceanGroupLabel } from "@/features/quiz/oceanGroup";
@@ -262,9 +262,9 @@ function parseQuestionSelectCommand(command: string): number | null {
 }
 
 export function useControlCommands(enabled: boolean, clientId?: string) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const router = useAppNavigate();
+  const pathname = useAppPathname();
+  const searchParams = useAppSearchParams();
   const currentModeParam = useMemo(() => searchParams.get("mode") ?? undefined, [searchParams]);
   const {
     userId,

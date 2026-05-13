@@ -1,26 +1,6 @@
-import React from "react";
 import { cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
-
-vi.mock("next/image", () => ({
-  default: (
-    props: React.ComponentProps<"img"> & {
-      fill?: boolean;
-      priority?: boolean;
-      unoptimized?: boolean;
-    }
-  ) => {
-    const {
-      alt = "",
-      fill: _fill,
-      priority: _priority,
-      unoptimized: _unoptimized,
-      ...rest
-    } = props;
-    return React.createElement("img", { alt, ...rest });
-  },
-}));
 
 const matchMediaMock = vi.fn().mockImplementation((query: string) => ({
   matches: false,

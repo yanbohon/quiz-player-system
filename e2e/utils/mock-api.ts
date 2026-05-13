@@ -16,6 +16,15 @@ type FusionEventNode = {
 
 type GrabResponse = Record<string, unknown>;
 type SubmitResponse = Record<string, unknown>;
+type OceanStageConfigResponse = {
+  questionCount?: number;
+  timeLimitSeconds?: number;
+  roundTimeLimitSeconds?: number;
+  mode?: "solo" | "group";
+  loadedPresetName?: string | null;
+  source?: string | null;
+  updatedAt?: string | null;
+};
 
 export async function mockFusionEvents(
   page: Page,
@@ -68,6 +77,28 @@ export async function mockGrabQuestionSequence(page: Page, responses: GrabRespon
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(payload),
+    });
+  });
+}
+
+export async function mockOceanStageConfig(
+  page: Page,
+  config: OceanStageConfigResponse = {}
+) {
+  await page.route("**/config", async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        questionCount: config.questionCount ?? 600,
+        timeLimitSeconds:
+          config.timeLimitSeconds ?? config.roundTimeLimitSeconds ?? 600,
+        mode: config.mode ?? "solo",
+        loadedPresetName: config.loadedPresetName ?? "E2E 题包",
+        source: config.source ?? "preset",
+        updatedAt: config.updatedAt ?? "2026-05-13T00:00:00.000Z",
+      }),
     });
   });
 }

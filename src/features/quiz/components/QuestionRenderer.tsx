@@ -229,8 +229,8 @@ export function QuestionRenderer({
                 aria-hidden="true"
                 className={styles.questionTitleActionIcon}
                 style={{
-                  WebkitMaskImage: `url(${trashIcon.src})`,
-                  maskImage: `url(${trashIcon.src})`,
+                  WebkitMaskImage: `url(${trashIcon})`,
+                  maskImage: `url(${trashIcon})`,
                 }}
               />
               清空连线
@@ -257,8 +257,8 @@ export function QuestionRenderer({
                 aria-hidden="true"
                 className={styles.pointSelectClearIcon}
                 style={{
-                  WebkitMaskImage: `url(${trashIcon.src})`,
-                  maskImage: `url(${trashIcon.src})`,
+                  WebkitMaskImage: `url(${trashIcon})`,
+                  maskImage: `url(${trashIcon})`,
                 }}
               />
               清空

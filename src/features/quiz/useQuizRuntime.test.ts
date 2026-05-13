@@ -10,8 +10,8 @@ const routerMocks = vi.hoisted(() => ({
   replace: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
+vi.mock("@/lib/router", () => ({
+  useAppNavigate: () => ({
     push: routerMocks.push,
     replace: routerMocks.replace,
   }),
@@ -145,6 +145,44 @@ describe("useQuizRuntime", () => {
     await waitFor(() => {
       expect(result.current.state.timeRemaining).toBe(120);
       expect(result.current.state.timeElapsed).toBe(0);
+    });
+  });
+
+  it("waits for ocean stage config before pulling the first question", async () => {
+    const grabNextQuestion = vi.fn(async () => createNormalizedQuestion());
+    useAppStore.getState().setUser({
+      id: "1001",
+      name: "一号竞答队",
+    });
+    useQuizStore.setState({
+      oceanStageConfigStatus: "loading",
+      oceanStageConfig: undefined,
+      waitingForStageStart: false,
+      grabNextQuestion,
+    });
+
+    renderHook(() => useQuizRuntime("ocean-adventure"));
+
+    await new Promise((resolve) => window.setTimeout(resolve, 10));
+    expect(grabNextQuestion).not.toHaveBeenCalled();
+
+    act(() => {
+      useQuizStore.setState({
+        oceanStageConfigStatus: "success",
+        oceanStageConfig: {
+          mode: "solo",
+          questionCount: 10,
+          timeLimitSeconds: 600,
+          loadedPresetName: "E2E 题包",
+          source: "preset",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(grabNextQuestion).toHaveBeenCalledTimes(1);
+      expect(grabNextQuestion).toHaveBeenCalledWith("1001", undefined);
     });
   });
 });

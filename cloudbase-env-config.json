@@ -1,66 +1,120 @@
 {
-  "description": "CloudBase 云托管环境变量配置（JSON格式）",
+  "description": "CloudBase 云托管环境变量配置（JSON格式）。Vite 迁移阶段优先使用 VITE_*，并保留 NEXT_PUBLIC_* 旧变量作为回退。",
   "usage": "在 CloudBase 控制台的环境变量配置中，可以导入此配置或逐项添加",
   "envId": "cloud1-8gzz6a4hc1833f5e",
   "serverName": "xinsai-player",
   "环境变量": {
     "必需配置": {
-      "NEXT_PUBLIC_API_BASE_URL": {
+      "VITE_API_BASE_URL": {
         "value": "https://your-api-server.com/api",
-        "description": "主 API 服务地址",
+        "description": "主 API 服务地址（Vite 优先变量）",
         "required": true,
         "example": "https://api.example.com/api"
       },
-      "NEXT_PUBLIC_MQTT_URL": {
+      "NEXT_PUBLIC_API_BASE_URL": {
+        "value": "https://your-api-server.com/api",
+        "description": "主 API 服务地址（旧变量，迁移阶段保留）",
+        "required": true,
+        "example": "https://api.example.com/api"
+      },
+      "VITE_MQTT_URL": {
         "value": "wss://your-mqtt-broker.com:8884/mqtt",
-        "description": "MQTT Broker WebSocket 地址（必须 wss://）",
+        "description": "MQTT Broker WebSocket 地址（Vite 优先变量，必须 wss://）",
         "required": true,
         "example": "wss://mqtt.example.com:8884/mqtt"
       },
+      "NEXT_PUBLIC_MQTT_URL": {
+        "value": "wss://your-mqtt-broker.com:8884/mqtt",
+        "description": "MQTT Broker WebSocket 地址（旧变量，迁移阶段保留）",
+        "required": true,
+        "example": "wss://mqtt.example.com:8884/mqtt"
+      },
+      "VITE_MQTT_USERNAME": {
+        "value": "your_mqtt_username",
+        "description": "MQTT 用户名（Vite 优先变量）",
+        "required": true,
+        "sensitive": true
+      },
       "NEXT_PUBLIC_MQTT_USERNAME": {
         "value": "your_mqtt_username",
-        "description": "MQTT 用户名",
+        "description": "MQTT 用户名（旧变量，迁移阶段保留）",
+        "required": true,
+        "sensitive": true
+      },
+      "VITE_MQTT_PASSWORD": {
+        "value": "your_mqtt_password",
+        "description": "MQTT 密码（Vite 优先变量）",
         "required": true,
         "sensitive": true
       },
       "NEXT_PUBLIC_MQTT_PASSWORD": {
         "value": "your_mqtt_password",
-        "description": "MQTT 密码",
+        "description": "MQTT 密码（旧变量，迁移阶段保留）",
         "required": true,
         "sensitive": true
       }
     },
     "MQTT主题配置": {
+      "VITE_MQTT_TOPIC_COMMAND": {
+        "value": "cmd",
+        "description": "命令主题（Vite 优先变量）",
+        "required": false
+      },
       "NEXT_PUBLIC_MQTT_TOPIC_COMMAND": {
         "value": "cmd",
-        "description": "命令主题",
+        "description": "命令主题（旧变量，迁移阶段保留）",
+        "required": false
+      },
+      "VITE_MQTT_TOPIC_CONTROL": {
+        "value": "quiz/control",
+        "description": "控制主题（Vite 优先变量）",
         "required": false
       },
       "NEXT_PUBLIC_MQTT_TOPIC_CONTROL": {
         "value": "quiz/control",
-        "description": "控制主题",
+        "description": "控制主题（旧变量，迁移阶段保留）",
+        "required": false
+      },
+      "VITE_MQTT_TOPIC_STATE_PREFIX": {
+        "value": "state",
+        "description": "状态主题前缀（Vite 优先变量）",
         "required": false
       },
       "NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX": {
         "value": "state",
-        "description": "状态主题前缀",
+        "description": "状态主题前缀（旧变量，迁移阶段保留）",
+        "required": false
+      },
+      "VITE_MQTT_ENABLED": {
+        "value": "true",
+        "description": "是否启用 MQTT（Vite 优先变量，如不需要实时功能设为 false）",
         "required": false
       },
       "NEXT_PUBLIC_MQTT_ENABLED": {
         "value": "true",
-        "description": "是否启用 MQTT（如不需要实时功能设为 false）",
+        "description": "是否启用 MQTT（旧变量，迁移阶段保留）",
         "required": false
       }
     },
     "可选配置": {
+      "VITE_TIHAI_API_BASE": {
+        "value": "https://znbiakwnyaoe.sealosbja.site/api",
+        "description": "题海 API 地址（Vite 优先变量）",
+        "required": false
+      },
       "NEXT_PUBLIC_TIHAI_API_BASE": {
         "value": "https://znbiakwnyaoe.sealosbja.site/api",
-        "description": "题海 API 地址",
+        "description": "题海 API 地址（旧变量，迁移阶段保留）",
+        "required": false
+      },
+      "VITE_ENABLE_QUERY_DEVTOOLS": {
+        "value": "false",
+        "description": "React Query 开发工具（Vite 优先变量，生产环境建议 false）",
         "required": false
       },
       "NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS": {
         "value": "false",
-        "description": "React Query 开发工具（生产环境建议 false）",
+        "description": "React Query 开发工具（旧变量，迁移阶段保留）",
         "required": false
       }
     },
@@ -70,14 +124,14 @@
         "description": "运行环境",
         "readOnly": true
       },
-      "NEXT_TELEMETRY_DISABLED": {
-        "value": "1",
-        "description": "禁用 Next.js 遥测",
+      "VITE_BASE_PATH": {
+        "value": "/xinsai-player",
+        "description": "Vite base 与 React Router basename（与云托管触发路径一致）",
         "readOnly": true
       },
       "NEXT_PUBLIC_BASE_PATH": {
         "value": "/xinsai-player",
-        "description": "Next.js basePath（与云托管触发路径一致）",
+        "description": "旧 basePath 变量（迁移阶段保留）",
         "readOnly": true
       }
     }
@@ -91,20 +145,29 @@
     "6. 保存后等待服务自动重启（约1-2分钟）"
   ],
   "快速配置（仅替换值）": {
+    "VITE_API_BASE_URL": "https://your-api-server.com/api",
     "NEXT_PUBLIC_API_BASE_URL": "https://your-api-server.com/api",
+    "VITE_TIHAI_API_BASE": "https://znbiakwnyaoe.sealosbja.site/api",
     "NEXT_PUBLIC_TIHAI_API_BASE": "https://znbiakwnyaoe.sealosbja.site/api",
+    "VITE_MQTT_URL": "wss://your-mqtt-broker.com:8884/mqtt",
     "NEXT_PUBLIC_MQTT_URL": "wss://your-mqtt-broker.com:8884/mqtt",
+    "VITE_MQTT_USERNAME": "your_mqtt_username",
     "NEXT_PUBLIC_MQTT_USERNAME": "your_mqtt_username",
+    "VITE_MQTT_PASSWORD": "your_mqtt_password",
     "NEXT_PUBLIC_MQTT_PASSWORD": "your_mqtt_password",
+    "VITE_MQTT_TOPIC_COMMAND": "cmd",
     "NEXT_PUBLIC_MQTT_TOPIC_COMMAND": "cmd",
+    "VITE_MQTT_TOPIC_CONTROL": "quiz/control",
     "NEXT_PUBLIC_MQTT_TOPIC_CONTROL": "quiz/control",
+    "VITE_MQTT_TOPIC_STATE_PREFIX": "state",
     "NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX": "state",
+    "VITE_MQTT_ENABLED": "true",
     "NEXT_PUBLIC_MQTT_ENABLED": "true",
+    "VITE_ENABLE_QUERY_DEVTOOLS": "false",
     "NEXT_PUBLIC_ENABLE_QUERY_DEVTOOLS": "false",
     "NODE_ENV": "production",
-    "NEXT_TELEMETRY_DISABLED": "1",
+    "VITE_BASE_PATH": "/xinsai-player",
     "NEXT_PUBLIC_BASE_PATH": "/xinsai-player"
   }
 }
-
 

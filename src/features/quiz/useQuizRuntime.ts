@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { Toast } from "@/lib/arco";
 import { API_ENDPOINTS } from "@/constants";
+import { useAppNavigate } from "@/lib/router";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore, DEFAULT_OCEAN_REMAINING_COUNT } from "@/store/quizStore";
 import { submitGrabbedAnswer, QuestionPoolEmptyError } from "@/lib/fusionClient";
@@ -619,7 +619,7 @@ function resolvePenaltyQuestionId(question: QuizQuestion | undefined) {
 }
 
 export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
-  const router = useRouter();
+  const router = useAppNavigate();
   const meta = useMemo(() => resolveMode(modeId), [modeId]);
   const ultimateBuzzMode = isUltimateBuzzMode(meta.id);
   const shouldEnforceHpElimination =
@@ -1136,6 +1136,10 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     }
   }, [grabNextQuestion, handleQuestionPoolEmpty, meta.id, oceanGroupId, resolveOceanMode, userId]);
 
+  const oceanConfigReady =
+    meta.id !== "ocean-adventure" ||
+    (oceanStageConfigStatus === "success" && !!oceanStageConfig);
+
   useEffect(() => {
     if (meta.questionFlow !== "local") return;
     if (quizQuestions.length > 0) return;
@@ -1155,6 +1159,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
   useEffect(() => {
     if (meta.questionFlow !== "pull") return;
     if (meta.id === "ocean-adventure" && waitingForStageStart) return;
+    if (!oceanConfigReady) return;
     if (quizQuestions.length > 0) return;
     if (!userId || pullFetchInFlightRef.current) return;
 
@@ -1166,6 +1171,7 @@ export function useQuizRuntime(modeId: ModeIdInput): QuizRuntime {
     fetchNextGrabQuestion,
     meta.questionFlow,
     meta.id,
+    oceanConfigReady,
     quizQuestions.length,
     userId,
     waitingForStageStart,

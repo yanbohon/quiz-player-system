@@ -2,21 +2,21 @@
 
 import { Button, NavBar, NoticeBar } from "@arco-design/mobile-react";
 import IconNotice from '@arco-design/mobile-react/esm/icon/IconNotice';
-import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
 import { Toast } from "@/lib/arco";
+import { useAppNavigate } from "@/lib/router";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
-import styles from "./page.module.css";
+import styles from "@/app/login/page.module.css";
 
 const TOTAL_STATIONS = 20;
 const PLAYER_ID_OFFSET = 1000;
 const STATION_NUMBERS = Array.from({ length: TOTAL_STATIONS }, (_, index) => index + 1);
 
 export default function LoginPage() {
-  const router = useRouter();
+  const router = useAppNavigate();
   const storeHydrated = useAppStoreHydrated();
   const { user, isAuthenticated, setUser } = useAppStore(
     useShallow((state) => ({

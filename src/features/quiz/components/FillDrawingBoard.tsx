@@ -17,7 +17,6 @@ import {
 } from "./SmoothDrawingCanvas";
 import { uploadDatasheetAttachment } from "@/lib/fusionClient";
 import styles from "./FillDrawingBoard.module.css";
-import type { StaticImageData } from "next/image";
 import undoIcon from "@/components/icons/undo.svg";
 import redoIcon from "@/components/icons/redo.svg";
 import trashIcon from "@/components/icons/trash.svg";
@@ -65,14 +64,14 @@ export interface FillDrawingBoardHandle {
   exportAndUpload: () => Promise<FillDrawingBoardPayload>;
 }
 
-function MaskIcon({ source, className }: { source: StaticImageData; className?: string }) {
+function MaskIcon({ source, className }: { source: string; className?: string }) {
   return (
     <span
       aria-hidden="true"
       className={className ? `${styles.iconGlyph} ${className}` : styles.iconGlyph}
       style={{
-        WebkitMaskImage: `url(${source.src})`,
-        maskImage: `url(${source.src})`,
+        WebkitMaskImage: `url(${source})`,
+        maskImage: `url(${source})`,
       }}
     />
   );

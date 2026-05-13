@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import type { OceanGroupId, OceanPlayMode } from "@/features/quiz/oceanGroup";
+import { isPublicEnvEnabled } from "@/config/env";
 
 interface User {
   id: string;
@@ -71,7 +72,7 @@ interface AppState {
 
 function readE2EAppSeed(): Partial<AppState> {
   if (
-    process.env.NEXT_PUBLIC_E2E !== "true" ||
+    !isPublicEnvEnabled("E2E") ||
     typeof window === "undefined"
   ) {
     return {};

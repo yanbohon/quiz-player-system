@@ -16,6 +16,7 @@ import {
 } from "@/lib/fusionClient";
 import { NormalizedQuestion } from "@/lib/normalizeQuestion";
 import type { OceanGroupId } from "@/features/quiz/oceanGroup";
+import { isPublicEnvEnabled } from "@/config/env";
 
 const INITIAL_HP = 3;
 const COMMAND_LOG_LIMIT = 30;
@@ -253,7 +254,7 @@ interface QuizState {
 
 function readE2EQuizSeed(): Partial<QuizState> {
   if (
-    process.env.NEXT_PUBLIC_E2E !== "true" ||
+    !isPublicEnvEnabled("E2E") ||
     typeof window === "undefined"
   ) {
     return {};

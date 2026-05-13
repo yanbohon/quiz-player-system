@@ -115,12 +115,12 @@ let quizStoreState: {
   resetWaitingTicketView: typeof testState.resetWaitingTicketViewMock;
 };
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
+vi.mock("@/lib/router", () => ({
+  useAppNavigate: () => ({
     push: testState.pushMock,
   }),
-  usePathname: () => "/quiz",
-  useSearchParams: () => ({
+  useAppPathname: () => "/quiz",
+  useAppSearchParams: () => ({
     get: () => null,
   }),
 }));

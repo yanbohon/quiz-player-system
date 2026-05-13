@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Divider, Loading, NavBar, NoticeBar } from "@arco-design/mobile-react";
-import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
+import AppImage from "@/components/AppImage";
 import { Toast } from "@/lib/arco";
+import { useAppNavigate } from "@/lib/router";
 import { mqttService } from "@/lib/mqtt/client";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
@@ -16,7 +16,7 @@ import IconPicture from "@arco-design/mobile-react/esm/icon/IconPicture";
 import IconNotice from "@arco-design/mobile-react/esm/icon/IconNotice";
 import IconUserFill from "@arco-design/mobile-react/esm/icon/IconUserFill";
 import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
-import styles from "./page.module.css";
+import styles from "@/app/waiting/page.module.css";
 
 import type { FusionEventSummary } from "@/lib/fusionClient";
 
@@ -148,7 +148,7 @@ function resolveSchoolBadgeUrl(
 }
 
 export default function WaitingPage() {
-  const router = useRouter();
+  const router = useAppNavigate();
   const storeHydrated = useAppStoreHydrated();
   const { user, isAuthenticated, mqttConnected, logout } = useAppStore(
     useShallow((state) => ({
@@ -274,7 +274,7 @@ export default function WaitingPage() {
             leftContent={null}
             rightContent={
               <button type="button" className={styles.logoutButton} onClick={handleLogout}>
-                <Image
+                <AppImage
                   src={LogoutIcon}
                   alt="退出登录"
                   width={24}
@@ -295,7 +295,7 @@ export default function WaitingPage() {
               <div className={styles.posterSection}>
                 {posterUrl ? (
                   <div className={styles.posterImageWrapper}>
-                    <Image
+                    <AppImage
                       src={posterUrl}
                       alt={`${selectedEvent?.name ?? "赛事"}海报`}
                       fill
@@ -354,7 +354,7 @@ export default function WaitingPage() {
                             }
                           >
                             {showBadgeImage && schoolBadgeUrl ? (
-                              <Image
+                              <AppImage
                                 src={schoolBadgeUrl}
                                 alt={schoolBadgeAlt}
                                 className={styles.avatarImage}

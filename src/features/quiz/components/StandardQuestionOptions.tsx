@@ -2,7 +2,7 @@
 
 import type { RefObject } from "react";
 import { Button } from "@arco-design/mobile-react";
-import NextImage from "next/image";
+import AppImage from "@/components/AppImage";
 import { OptionCardButton } from "@/features/quiz/components/OptionCardButton";
 import { SuccessCheckIcon } from "@/features/quiz/components/QuizIcons";
 import type { StandardQuestion } from "@/features/quiz/types";
@@ -348,7 +348,7 @@ export function StandardQuestionOptions({
         {fillPreview ? (
           <>
             <div className={styles.boardPreview}>
-              <NextImage
+              <AppImage
                 src={fillPreview}
                 alt="画板作答预览"
                 className={styles.boardPreviewImage}

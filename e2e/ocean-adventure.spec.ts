@@ -1,8 +1,25 @@
 import { expect, test } from "./fixtures";
 
+const oceanStage = {
+  order: 1,
+  stageId: "stage-ocean",
+  recordId: "record-stage-ocean",
+  name: "题海遨游",
+  displayName: "题海遨游",
+  generalSheetId: "general-ocean",
+  kind: "grab",
+  rawFields: {},
+};
+
 test("ocean-adventure grabs the next question after a successful submission", async ({
   quizApp,
 }) => {
+  await quizApp.mockOceanStageConfig({
+    mode: "solo",
+    questionCount: 600,
+    timeLimitSeconds: 600,
+  });
+
   await quizApp.mockGrabQuestionSequence([
     {
       success: true,
@@ -59,6 +76,28 @@ test("ocean-adventure grabs the next question after a successful submission", as
   await quizApp.goto("/quiz?mode=ocean-adventure", {
     app: {
       oceanPlayMode: "solo",
+    },
+    quiz: {
+      selectedEvent: {
+        id: "event-ocean",
+        name: "题海测试",
+        type: "folder",
+        index: 0,
+      },
+      currentStage: oceanStage,
+      stages: [oceanStage],
+      waitingForStageStart: false,
+      questionGateOpened: true,
+      oceanRemainingCount: 600,
+      oceanStageConfigStatus: "success",
+      oceanStageConfig: {
+        mode: "solo",
+        questionCount: 600,
+        timeLimitSeconds: 600,
+        loadedPresetName: "E2E 题包",
+        source: "preset",
+        updatedAt: "2026-05-13T00:00:00.000Z",
+      },
     },
   });
 

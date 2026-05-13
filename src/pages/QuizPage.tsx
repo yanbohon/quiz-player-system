@@ -2,12 +2,12 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, NavBar } from "@arco-design/mobile-react";
-import { useRouter, useSearchParams } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { ArcoClient } from "@/components/ArcoClient";
 import { Dialog, Toast } from "@/lib/arco";
 import { mqttService } from "@/lib/mqtt/client";
 import { useMqttSubscription } from "@/lib/mqtt/hooks";
+import { useAppNavigate, useAppSearchParams } from "@/lib/router";
 import { MQTT_TOPICS } from "@/config/control";
 import { resolveTihaiUrl } from "@/config/api";
 import type { NormalizedQuestion } from "@/lib/normalizeQuestion";
@@ -101,7 +101,7 @@ import {
   isImageTypeQuestion,
   resolveQuestionImageEntries,
 } from "@/features/quiz/utils/questionImages";
-import styles from "./page.module.css";
+import styles from "@/app/quiz/page.module.css";
 
 const DEFAULT_NOTIFY_OFFSET = 68;
 const FILL_SKETCH_CACHE_LIMIT = 10;
@@ -248,8 +248,8 @@ function savePreviewToStorage(token: string, preview: string) {
 }
 
 function QuizPageContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const router = useAppNavigate();
+  const searchParams = useAppSearchParams();
   const storeHydrated = useAppStoreHydrated();
   const initialMode = (searchParams.get("mode") as ContestModeId | null) ?? DEFAULT_MODE.id;
   const sprintEntryKey = searchParams.get("entry") ?? null;
@@ -767,9 +767,6 @@ function QuizPageContent() {
     }
 
     if (oceanStageConfigStatus !== "success" || !oceanStageConfig) {
-      if (oceanPlayMode !== null) {
-        setOceanPlayMode(null);
-      }
       return;
     }
 

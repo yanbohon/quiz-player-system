@@ -1,3 +1,5 @@
+import { getPublicEnv } from "@/config/env";
+
 function normalizeBaseUrl(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();
   if (!trimmed) return fallback;
@@ -8,11 +10,11 @@ export const API_CONFIG = {
   // 注意：baseUrl 使用内置默认值，不需要配置环境变量
   // 项目主要使用：tihaiBaseUrl（题海抢题）和 FUSION_API_CONFIG（飞书多维表格）
   baseUrl: normalizeBaseUrl(
-    process.env.NEXT_PUBLIC_API_BASE_URL,
+    getPublicEnv("API_BASE_URL"),
     ""
   ),
   tihaiBaseUrl: normalizeBaseUrl(
-    process.env.NEXT_PUBLIC_TIHAI_API_BASE,
+    getPublicEnv("TIHAI_API_BASE"),
     "https://fn.ohvfx.com/quiz-pool/api"
   ),
 } as const;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect } from "react";
+import { isPublicEnvEnabled } from "@/config/env";
 import { useAppStore } from "@/store/useAppStore";
 import { useQuizStore } from "@/store/quizStore";
 
@@ -140,7 +141,7 @@ function applySeededQuizState(seed?: QuizStoreSeed) {
 }
 
 export function E2EBridge() {
-  const enabled = process.env.NEXT_PUBLIC_E2E === "true";
+  const enabled = isPublicEnvEnabled("E2E");
 
   useLayoutEffect(() => {
     if (!enabled || typeof window === "undefined") return;
