@@ -27,8 +27,8 @@ export type JudgeResultPersistenceTask = {
   params: {
     datasheetId: string;
     recordId: string;
-    questionId: string;
-    answer: string;
+    questionId?: string;
+    answer?: string;
     time?: number | string;
     light?: "0" | "1";
     statusFieldKey?: string;
@@ -237,10 +237,30 @@ export function sanitizePersistenceTask(source: unknown): PersistenceTask | null
   const status = rawParams["status"];
   if (
     typeof datasheetId !== "string" ||
-    typeof recordId !== "string" ||
-    typeof questionId !== "string" ||
-    typeof answer !== "string"
+    typeof recordId !== "string"
   ) {
+    return null;
+  }
+  const normalizedQuestionId =
+    typeof questionId === "string" && questionId.trim() ? questionId : undefined;
+  const normalizedAnswer = typeof answer === "string" ? answer : undefined;
+  const normalizedTime =
+    typeof time === "number" || typeof time === "string" ? time : undefined;
+  const normalizedLight = light === "0" || light === "1" ? light : undefined;
+  const normalizedStatusFieldKey =
+    typeof statusFieldKey === "string" && statusFieldKey.trim()
+      ? statusFieldKey
+      : undefined;
+  const normalizedStatus =
+    typeof status === "string" && status.trim() ? status : undefined;
+  const hasQuestionResult =
+    normalizedQuestionId !== undefined && normalizedAnswer !== undefined;
+  const hasAnyPatch =
+    hasQuestionResult ||
+    normalizedTime !== undefined ||
+    normalizedLight !== undefined ||
+    (normalizedStatusFieldKey !== undefined && normalizedStatus !== undefined);
+  if (!hasAnyPatch) {
     return null;
   }
   return {
@@ -248,15 +268,12 @@ export function sanitizePersistenceTask(source: unknown): PersistenceTask | null
     params: {
       datasheetId,
       recordId,
-      questionId,
-      answer,
-      time: typeof time === "number" || typeof time === "string" ? time : undefined,
-      light: light === "0" || light === "1" ? light : undefined,
-      statusFieldKey:
-        typeof statusFieldKey === "string" && statusFieldKey.trim()
-          ? statusFieldKey
-          : undefined,
-      status: typeof status === "string" && status.trim() ? status : undefined,
+      questionId: normalizedQuestionId,
+      answer: normalizedAnswer,
+      time: normalizedTime,
+      light: normalizedLight,
+      statusFieldKey: normalizedStatusFieldKey,
+      status: normalizedStatus,
     },
   };
 }

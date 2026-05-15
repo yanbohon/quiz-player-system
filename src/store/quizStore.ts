@@ -225,8 +225,8 @@ interface QuizState {
   submitJudgeResult: (params: {
     datasheetId: string;
     recordId: string;
-    questionId: string;
-    answer: string;
+    questionId?: string;
+    answer?: string;
     time?: number | string;
     light?: "0" | "1";
     statusFieldKey?: string;
@@ -1169,9 +1169,10 @@ export const useQuizStore = create<QuizState>()(
       statusFieldKey,
       status,
     }) => {
-      const fields: Record<string, unknown> = {
-        [questionId]: answer,
-      };
+      const fields: Record<string, unknown> = {};
+      if (questionId && typeof answer === "string") {
+        fields[questionId] = answer;
+      }
       if (typeof time === "number") {
         fields.time = time;
       } else if (typeof time === "string") {

@@ -155,6 +155,31 @@ describe("quizStore refreshScoreRecord", () => {
     });
   });
 
+  it("can sync only the remaining time field for speed-run timeout", async () => {
+    patchDatasheetRecordsMock.mockResolvedValue(undefined);
+
+    await useQuizStore.getState().submitJudgeResult({
+      datasheetId: "score-sheet",
+      recordId: "score-record-1",
+      time: "0",
+    });
+
+    const payload = patchDatasheetRecordsMock.mock.calls[0]?.[1];
+    const fields = payload?.records?.[0]?.fields;
+    expect(fields).not.toHaveProperty("undefined");
+    expect(fields).toEqual({ time: "0" });
+    expect(patchDatasheetRecordsMock).toHaveBeenCalledWith("score-sheet", {
+      records: [
+        {
+          recordId: "score-record-1",
+          fields: {
+            time: "0",
+          },
+        },
+      ],
+    });
+  });
+
   it("reuses the event-level general sheet when a stage does not declare its own team directory", async () => {
     fetchDatasheetRecordsMock.mockResolvedValue([
       {

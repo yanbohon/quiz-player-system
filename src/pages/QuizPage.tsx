@@ -73,6 +73,7 @@ import { QuizSyncQueuePanel } from "@/features/quiz/components/QuizSyncQueuePane
 import { UltimatePkPanel } from "@/features/quiz/components/UltimatePkPanel";
 import { useQuizPersistenceQueue } from "@/features/quiz/hooks/useQuizPersistenceQueue";
 import { useQuizSubmission } from "@/features/quiz/hooks/useQuizSubmission";
+import { useSpeedRunTimeoutSync } from "@/features/quiz/hooks/useSpeedRunTimeoutSync";
 import { resolveStatusFieldKey, resolveLastStandGroupStatusIndicator } from "@/features/quiz/status";
 import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
 import {
@@ -1661,6 +1662,14 @@ function QuizPageContent() {
   const isSpeedRunFinished = speedRunEndReason !== undefined;
   const isSpeedRunTimerExpired = speedRunEndReason === "timer";
   const isSpeedRunCompleted = speedRunEndReason === "complete";
+
+  useSpeedRunTimeoutSync({
+    modeId: meta.id,
+    speedRunEndReason,
+    currentStage,
+    scoreRecord,
+    enqueueJob,
+  });
 
   const speedRunStats = useMemo(() => {
     if (meta.id !== "speed-run") return null;
