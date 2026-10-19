@@ -9,7 +9,7 @@ import { Toast } from "@/lib/arco";
 import { useAppNavigate } from "@/lib/router";
 import { useAppStore } from "@/store/useAppStore";
 import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
-import styles from "@/app/login/page.module.css";
+import styles from "@/styles/login.module.css";
 
 const TOTAL_STATIONS = 20;
 const PLAYER_ID_OFFSET = 1000;

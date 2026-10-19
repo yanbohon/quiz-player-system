@@ -86,13 +86,12 @@ npm run test:e2e:broker
 .
 ├── src/pages/              # SPA 路由页面
 ├── src/providers/          # 全局 Provider 与 E2E 桥接
-├── src/app/                # 全局样式与保留的 CSS Modules
+├── src/styles/             # 全局样式与页面样式模块
 ├── src/features/quiz/      # 赛制运行时、题型组件、答题逻辑
 ├── src/store/              # app-store / quiz-store
 ├── src/lib/                # API、MQTT、题目归一化、Arco 适配
 ├── e2e/                    # Playwright 用例
-├── docs/                   # 当前有效文档
-└── docs/archive/           # 历史实现、部署和迁移文档
+└── docs/                   # 当前有效文档
 ```
 
 ## 文档导航
@@ -110,4 +109,3 @@ npm run test:e2e:broker
 - [docs/MQTT_TROUBLESHOOTING.md](./docs/MQTT_TROUBLESHOOTING.md) MQTT 故障排查
 - [docs/REACT19_MIGRATION.md](./docs/REACT19_MIGRATION.md) React 19 与 Arco 适配说明
 - [docs/FLEXIBLE.md](./docs/FLEXIBLE.md) 移动端 rem 适配说明
-- [docs/archive/README.md](./docs/archive/README.md) 归档文档说明

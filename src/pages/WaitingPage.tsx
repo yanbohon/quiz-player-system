@@ -16,7 +16,7 @@ import IconPicture from "@arco-design/mobile-react/esm/icon/IconPicture";
 import IconNotice from "@arco-design/mobile-react/esm/icon/IconNotice";
 import IconUserFill from "@arco-design/mobile-react/esm/icon/IconUserFill";
 import { useAppStoreHydrated } from "@/hooks/useAppStoreHydrated";
-import styles from "@/app/waiting/page.module.css";
+import styles from "@/styles/waiting.module.css";
 
 import type { FusionEventSummary } from "@/lib/fusionClient";
 

@@ -18,7 +18,7 @@ import {
   type StandardQuestionOptionsProps,
 } from "@/features/quiz/components/StandardQuestionOptions";
 import type { QuizQuestion } from "@/features/quiz/types";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 
 interface SelectionSummary {
   tokens: string[];

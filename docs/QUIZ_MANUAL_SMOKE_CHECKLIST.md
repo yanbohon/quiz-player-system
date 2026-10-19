@@ -11,7 +11,7 @@
 
 ## 适用时机
 
-- `src/app/quiz/page.tsx` 或 `src/features/quiz` 大改后
+- `src/pages/QuizPage.tsx` 或 `src/features/quiz` 大改后
 - 发布前
 - 接入新赛制、新题型、新 MQTT 指令后
 

@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 覆盖 `src/app/quiz/page.tsx` 重构后的高风险回归面，优先保证“能答题、能提交、能显示正确赛制状态”。
+- 覆盖 `src/pages/QuizPage.tsx` 重构后的高风险回归面，优先保证“能答题、能提交、能显示正确赛制状态”。
 - 将回归测试拆成三层：
   - 纯逻辑单测：适合 `Vitest`
   - Hook / 组件集成测试：基于 `jsdom + @testing-library/react + @testing-library/user-event`
@@ -54,7 +54,7 @@
 - L3 人工冒烟
   - 目标：校验 MQTT、抢答、画板、几何连线、主持人指令联动
   - 重点文件：
-    - [page.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/app/quiz/page.tsx)
+    - [QuizPage.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/pages/QuizPage.tsx)
     - [client.ts](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/lib/mqtt/client.ts)
     - [hooks.ts](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/lib/mqtt/hooks.ts)
   - 正式执行脚本：
@@ -161,7 +161,7 @@
 ### P0 回归点
 
 - `page.tsx` 中 `renderQuestionContent` 的赛制分支不能串线
-  - 文件：[page.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/app/quiz/page.tsx)
+  - 文件：[QuizPage.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/pages/QuizPage.tsx)
   - 关键分支：`speed-run`、`ocean-adventure`、`ultimate-challenge`、`buzzer-sprint`、淘汰态、空题态
   - 建议层级：L2
 - `SpeedRunResultPanel` / `OceanResultPanel` 的结果标题、分数、状态文案不能回归
@@ -171,11 +171,11 @@
   - 文件：[QuizProgressCard.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/features/quiz/components/QuizProgressCard.tsx)
   - 建议层级：L2
 - 主持人判定区只应在满足条件时显示，且按钮禁用态正确
-  - 文件：[page.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/app/quiz/page.tsx)
+  - 文件：[QuizPage.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/pages/QuizPage.tsx)
   - 关键函数：`handleApplyJudgement`
   - 建议层级：L2
 - 终极挑战 / 抢答冲刺的等待 / 抢答 / 锁定 / 作答阶段不能串线
-  - 文件：[page.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/app/quiz/page.tsx)
+  - 文件：[QuizPage.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/pages/QuizPage.tsx)
   - 关键函数：`handleTriggerBuzzer`
   - 建议层级：L2 + L3
 

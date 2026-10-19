@@ -1,4 +1,4 @@
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 import { EliminatedIcon, SuccessCheckIcon } from "@/features/quiz/components/QuizIcons";
 
 export function CommandSubmissionResult() {

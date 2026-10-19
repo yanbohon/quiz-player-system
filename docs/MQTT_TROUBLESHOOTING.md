@@ -13,22 +13,24 @@
 需要重点检查这些环境变量：
 
 ```env
-NEXT_PUBLIC_MQTT_ENABLED=true
-NEXT_PUBLIC_MQTT_URL=wss://your-broker.example.com:8084/mqtt
-NEXT_PUBLIC_MQTT_USERNAME=your-username
-NEXT_PUBLIC_MQTT_PASSWORD=your-password
-NEXT_PUBLIC_MQTT_TOPIC_COMMAND=cmd
-NEXT_PUBLIC_MQTT_TOPIC_CONTROL=quiz/control
-NEXT_PUBLIC_MQTT_TOPIC_RESULT=quiz/result
-NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
-NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX=state
+VITE_MQTT_ENABLED=true
+VITE_MQTT_URL=wss://your-broker.example.com:8084/mqtt
+VITE_MQTT_USERNAME=your-username
+VITE_MQTT_PASSWORD=your-password
+VITE_MQTT_TOPIC_COMMAND=cmd
+VITE_MQTT_TOPIC_CONTROL=quiz/control
+VITE_MQTT_TOPIC_RESULT=quiz/result
+VITE_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
+VITE_MQTT_TOPIC_STATE_PREFIX=state
 ```
 
 如果本地只做 UI 开发，可直接设为：
 
 ```env
-NEXT_PUBLIC_MQTT_ENABLED=false
+VITE_MQTT_ENABLED=false
 ```
+
+`NEXT_PUBLIC_*` 旧变量仍作为兼容回退读取，新配置统一使用 `VITE_*`。
 
 ## 当前客户端参数
 
@@ -42,7 +44,7 @@ NEXT_PUBLIC_MQTT_ENABLED=false
 
 ## 排查顺序
 
-1. 确认 `NEXT_PUBLIC_MQTT_ENABLED` 不是 `false`
+1. 确认 `VITE_MQTT_ENABLED` 不是 `false`
 2. 确认 Broker 地址能从浏览器所在网络访问
 3. 确认主题名和主持人端一致
 4. 打开浏览器 Console，查看 `MQTT connection error`、`offline`、`reconnecting` 日志
@@ -73,7 +75,7 @@ NEXT_PUBLIC_MQTT_ENABLED=false
 可以直接禁用 MQTT：
 
 ```env
-NEXT_PUBLIC_MQTT_ENABLED=false
+VITE_MQTT_ENABLED=false
 ```
 
 这样页面仍可打开，适合纯 UI 调整和非实时逻辑开发。

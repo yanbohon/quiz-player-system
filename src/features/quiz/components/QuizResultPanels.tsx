@@ -7,7 +7,7 @@ import {
   ErrorBadgeIcon,
   SuccessCheckIcon,
 } from "@/features/quiz/components/QuizIcons";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 
 export interface OceanStatsSummary {
   total?: number;

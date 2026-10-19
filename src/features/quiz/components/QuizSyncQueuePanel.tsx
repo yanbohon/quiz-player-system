@@ -1,6 +1,6 @@
 import { Button } from "@arco-design/mobile-react";
 import { Dialog } from "@/lib/arco";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 
 export interface QuizSyncQueueItem {
   id: string;

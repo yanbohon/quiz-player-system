@@ -15,17 +15,19 @@
 
 ### 环境变量
 
+代码优先读取 `VITE_*`，仍兼容同名 `NEXT_PUBLIC_*` 旧变量作为回退。
+
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `NEXT_PUBLIC_MQTT_ENABLED` | `true` | 设为 `false` 可完全禁用 MQTT |
-| `NEXT_PUBLIC_MQTT_URL` | `wss://ws.ohvfx.com:8084/mqtt` | Broker WebSocket 地址 |
-| `NEXT_PUBLIC_MQTT_USERNAME` | 内置默认值 | MQTT 用户名 |
-| `NEXT_PUBLIC_MQTT_PASSWORD` | 内置默认值 | MQTT 密码 |
-| `NEXT_PUBLIC_MQTT_TOPIC_COMMAND` | `cmd` | 主持人文本指令 |
-| `NEXT_PUBLIC_MQTT_TOPIC_CONTROL` | `quiz/control` | 抢答控制主题 |
-| `NEXT_PUBLIC_MQTT_TOPIC_RESULT` | `quiz/result` | 抢答结果主题 |
-| `NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN` | `quiz/buzz_in` | 选手抢答上报主题 |
-| `NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX` | `state` | 在线状态主题前缀 |
+| `VITE_MQTT_ENABLED` | `true` | 设为 `false` 可完全禁用 MQTT |
+| `VITE_MQTT_URL` | 无 | Broker WebSocket 地址，必须按环境配置 |
+| `VITE_MQTT_USERNAME` | 无 | MQTT 用户名，按 Broker 要求配置 |
+| `VITE_MQTT_PASSWORD` | 无 | MQTT 密码，按 Broker 要求配置 |
+| `VITE_MQTT_TOPIC_COMMAND` | `cmd` | 主持人文本指令 |
+| `VITE_MQTT_TOPIC_CONTROL` | `quiz/control` | 抢答控制主题 |
+| `VITE_MQTT_TOPIC_RESULT` | `quiz/result` | 抢答结果主题 |
+| `VITE_MQTT_TOPIC_BUZZ_IN` | `quiz/buzz_in` | 选手抢答上报主题 |
+| `VITE_MQTT_TOPIC_STATE_PREFIX` | `state` | 在线状态主题前缀 |
 
 ### 当前用法
 
@@ -42,10 +44,10 @@
 
 | 变量 | 说明 |
 | --- | --- |
-| `NEXT_PUBLIC_FUSION_API_BASE` | Fusion 基础地址 |
-| `NEXT_PUBLIC_FUSION_API_TOKEN` | Bearer Token |
-| `NEXT_PUBLIC_FUSION_SPACE_ID` | 空间 ID |
-| `NEXT_PUBLIC_FUSION_EVENT_NODE_ID` | 赛事节点 ID |
+| `VITE_FUSION_API_BASE` | Fusion 基础地址，必须按环境配置 |
+| `VITE_FUSION_API_TOKEN` | Bearer Token，必须按环境配置 |
+| `VITE_FUSION_SPACE_ID` | 空间 ID，必须按环境配置 |
+| `VITE_FUSION_EVENT_NODE_ID` | 赛事节点 ID，必须按环境配置 |
 
 ### 当前请求
 
@@ -74,7 +76,7 @@
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `NEXT_PUBLIC_TIHAI_API_BASE` | `https://fn.ohvfx.com/quiz-pool/api` | 题海接口基础地址 |
+| `VITE_TIHAI_API_BASE` | 无 | 题海接口基础地址，必须按环境配置 |
 
 ### 当前请求
 

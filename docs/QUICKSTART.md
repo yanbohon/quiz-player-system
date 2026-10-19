@@ -16,28 +16,29 @@ npm install
 项目当前没有维护 `.env.example`，请按下面模板手动创建：
 
 ```env
-NEXT_PUBLIC_FUSION_API_BASE=https://your-fusion.example.com/fusion
-NEXT_PUBLIC_FUSION_API_TOKEN=your-token
-NEXT_PUBLIC_FUSION_SPACE_ID=your-space-id
-NEXT_PUBLIC_FUSION_EVENT_NODE_ID=your-event-node-id
+VITE_FUSION_API_BASE=https://your-fusion.example.com/fusion
+VITE_FUSION_API_TOKEN=your-token
+VITE_FUSION_SPACE_ID=your-space-id
+VITE_FUSION_EVENT_NODE_ID=your-event-node-id
 
-NEXT_PUBLIC_TIHAI_API_BASE=https://your-quiz-pool.example.com/api
+VITE_TIHAI_API_BASE=https://your-quiz-pool.example.com/api
 
-NEXT_PUBLIC_MQTT_ENABLED=true
-NEXT_PUBLIC_MQTT_URL=wss://your-broker.example.com:8084/mqtt
-NEXT_PUBLIC_MQTT_USERNAME=your-username
-NEXT_PUBLIC_MQTT_PASSWORD=your-password
-NEXT_PUBLIC_MQTT_TOPIC_COMMAND=cmd
-NEXT_PUBLIC_MQTT_TOPIC_CONTROL=quiz/control
-NEXT_PUBLIC_MQTT_TOPIC_RESULT=quiz/result
-NEXT_PUBLIC_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
-NEXT_PUBLIC_MQTT_TOPIC_STATE_PREFIX=state
+VITE_MQTT_ENABLED=true
+VITE_MQTT_URL=wss://your-broker.example.com:8084/mqtt
+VITE_MQTT_USERNAME=your-username
+VITE_MQTT_PASSWORD=your-password
+VITE_MQTT_TOPIC_COMMAND=cmd
+VITE_MQTT_TOPIC_CONTROL=quiz/control
+VITE_MQTT_TOPIC_RESULT=quiz/result
+VITE_MQTT_TOPIC_BUZZ_IN=quiz/buzz_in
+VITE_MQTT_TOPIC_STATE_PREFIX=state
 ```
 
 补充说明：
 
-- 只做页面开发时，可以将 `NEXT_PUBLIC_MQTT_ENABLED=false`。
-- `NEXT_PUBLIC_API_BASE_URL` 不是当前主链路必需项，仅保留给通用 REST helper。
+- 只做页面开发时，可以将 `VITE_MQTT_ENABLED=false`。
+- `VITE_API_BASE_URL` 不是当前主链路必需项，仅保留给通用 REST helper。
+- `NEXT_PUBLIC_*` 旧变量仍会作为兼容回退读取，新配置统一使用 `VITE_*`。
 
 ## 3. 启动本地开发
 

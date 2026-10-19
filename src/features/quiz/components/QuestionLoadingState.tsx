@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 import { ErrorBadgeIcon, SuccessCheckIcon } from "@/features/quiz/components/QuizIcons";
 
 export interface QuestionLoadingStateProps {

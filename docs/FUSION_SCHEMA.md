@@ -319,7 +319,7 @@ C. 选项三
 - `permalink`
 - `token`
 
-见 [waiting/page.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/app/waiting/page.tsx#L87)。
+见 [WaitingPage.tsx](/Users/yanbo./Downloads/答题系统/[重构]选手端/src/pages/WaitingPage.tsx#L87)。
 
 ## 6. 分数表
 

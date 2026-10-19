@@ -2,6 +2,7 @@ import { getPublicEnv, isPublicEnvEnabled } from "@/config/env";
 
 // MQTT can be disabled by setting VITE_MQTT_ENABLED=false or NEXT_PUBLIC_MQTT_ENABLED=false.
 const MQTT_ENABLED = isPublicEnvEnabled("MQTT_ENABLED", true);
+const MQTT_URL = getPublicEnv("MQTT_URL");
 
 function normalizeTopic(input: string | undefined, fallback: string) {
   const value = input?.trim();
@@ -20,11 +21,14 @@ function joinTopicSegments(...segments: Array<string | undefined>) {
     .join("/");
 }
 
-export const MQTT_CONFIG = MQTT_ENABLED ? {
-  url: getPublicEnv("MQTT_URL", "wss://ws.ohvfx.com:8084/mqtt")!,
-  username: getPublicEnv("MQTT_USERNAME", "xdx")!,
-  password: getPublicEnv("MQTT_PASSWORD", "xdx12138")!,
-} : undefined;
+export const MQTT_CONFIG =
+  MQTT_ENABLED && MQTT_URL
+    ? {
+        url: MQTT_URL,
+        username: getPublicEnv("MQTT_USERNAME"),
+        password: getPublicEnv("MQTT_PASSWORD"),
+      }
+    : undefined;
 
 const STATE_TOPIC_PREFIX = normalizeTopic(
   getPublicEnv("MQTT_TOPIC_STATE_PREFIX"),
@@ -43,10 +47,8 @@ export const MQTT_TOPICS = {
 };
 
 export const FUSION_API_CONFIG = {
-  baseUrl: getPublicEnv("FUSION_API_BASE", "https://api.ohvfx.com/fusion")!,
-  token:
-    getPublicEnv("FUSION_API_TOKEN", "uskOS7wIpVOyV6glpE7eOY6")!,
-  spaceId: getPublicEnv("FUSION_SPACE_ID", "spch5h60Pobkk")!,
-  eventNodeId:
-    getPublicEnv("FUSION_EVENT_NODE_ID", "foduzcRW7MGLv")!,
+  baseUrl: getPublicEnv("FUSION_API_BASE") ?? "",
+  token: getPublicEnv("FUSION_API_TOKEN") ?? "",
+  spaceId: getPublicEnv("FUSION_SPACE_ID") ?? "",
+  eventNodeId: getPublicEnv("FUSION_EVENT_NODE_ID") ?? "",
 };

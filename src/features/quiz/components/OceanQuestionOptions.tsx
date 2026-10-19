@@ -7,7 +7,7 @@ import {
   resolveOceanSelectionMode,
   sortOceanSelectionIds,
 } from "@/features/quiz/utils/answering";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 
 export interface OceanQuestionOptionsProps {
   question: CustomOceanQuestion;

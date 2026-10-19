@@ -2,7 +2,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "@/App";
 import { getBasePath } from "@/config/env";
-import "./app/globals.css";
+import "./styles/globals.css";
 
 const rootElement = document.getElementById("root");
 

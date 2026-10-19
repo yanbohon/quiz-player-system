@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { Progress } from "@arco-design/mobile-react";
 
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 import { ClockIcon, HeartIcon } from "@/features/quiz/components/QuizIcons";
 import type { OceanGroupId, OceanPlayMode } from "@/features/quiz/oceanGroup";
 

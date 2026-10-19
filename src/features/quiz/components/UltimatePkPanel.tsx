@@ -1,4 +1,4 @@
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 import { SwitchArrowsIcon } from "@/features/quiz/components/QuizIcons";
 
 type UltimatePkTeam = "affirmative" | "negative";

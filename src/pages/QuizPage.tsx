@@ -102,7 +102,7 @@ import {
   isImageTypeQuestion,
   resolveQuestionImageEntries,
 } from "@/features/quiz/utils/questionImages";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 
 const DEFAULT_NOTIFY_OFFSET = 68;
 const FILL_SKETCH_CACHE_LIMIT = 10;

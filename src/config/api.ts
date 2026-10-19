@@ -15,7 +15,7 @@ export const API_CONFIG = {
   ),
   tihaiBaseUrl: normalizeBaseUrl(
     getPublicEnv("TIHAI_API_BASE"),
-    "https://fn.ohvfx.com/quiz-pool/api"
+    ""
   ),
 } as const;
 

@@ -2,8 +2,6 @@
 
 本项目使用 Arco Design Mobile 官方提供的 `flexible.js` 进行 rem 自适应适配。
 
-> 📚 **相关文档**：历史转换示例见 [archive/FLEXIBLE_EXAMPLE.md](./archive/FLEXIBLE_EXAMPLE.md)
-
 ## 配置说明
 
 ### 当前配置（默认值）

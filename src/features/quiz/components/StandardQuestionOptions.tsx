@@ -6,7 +6,7 @@ import AppImage from "@/components/AppImage";
 import { OptionCardButton } from "@/features/quiz/components/OptionCardButton";
 import { SuccessCheckIcon } from "@/features/quiz/components/QuizIcons";
 import type { StandardQuestion } from "@/features/quiz/types";
-import styles from "@/app/quiz/page.module.css";
+import styles from "@/styles/quiz.module.css";
 
 export interface MatchingLineSegment {
   id: string;
